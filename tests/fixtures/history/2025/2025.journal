@@ -1,0 +1,37 @@
+; GENERATED, do not edit: bank 2025 from 2025.csv and one-offs.rules
+;   hledger -f 2025/2025.csv --rules 2025/one-offs.rules print -c €1,000.00
+
+decimal-mark .
+
+2025-01-02 Salary
+    income:work            €-200.00
+    assets:checking         €200.00 = €200.00
+
+2025-01-05 Groceries
+    expenses:food:groceries          €10.00
+    assets:checking                 €-10.00 = €190.00
+
+2025-01-10 Spotify  ; vast:
+    expenses:subscriptions          €11.99
+    assets:checking                €-11.99 = €178.01
+
+2025-02-01 Groceries
+    expenses:food:groceries          €20.00
+    assets:checking                 €-20.00 = €158.01
+
+2025-03-01 Snacks
+    expenses:food:groceries           €7.50
+    assets:checking                  €-7.50 = €150.51
+
+2025-04-10 Beer in Prague  ; reis:praag
+    expenses:food:drinks          €12.00
+    assets:checking              €-12.00 = €138.51
+
+2025-06-01 Groceries  ; reis:gent
+    expenses:food:groceries           €8.00
+    assets:checking                  €-8.00 = €130.51
+
+2025-12-30 Cash withdrawal
+    expenses:cash           €130.51
+    assets:checking        €-130.51 = €0.00
+

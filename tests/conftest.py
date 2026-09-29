@@ -42,3 +42,13 @@ def workdir(tmp_path: Path) -> Path:
 needs_hledger = pytest.mark.skipif(
     shutil.which("hledger") is None, reason="hledger not on PATH"
 )
+
+
+@pytest.fixture
+def history_workdir(workdir: Path) -> Path:
+    """The workdir plus a categorised 2025, included in the main journal."""
+    shutil.copytree(workdir / "history" / "2025", workdir / "2025")
+    main = workdir / "main.journal"
+    include = "include 2025/2025.journal\ninclude 2026/"
+    main.write_text(main.read_text().replace("include 2026/", include))
+    return workdir

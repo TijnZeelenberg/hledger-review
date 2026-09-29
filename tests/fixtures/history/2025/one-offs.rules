@@ -1,0 +1,12 @@
+# 2025 one-offs: history for the review's suggestions.
+
+include ../bank.rules
+
+if|account1|description|comment
+%date ^20250105$ && %saldo ^190,00$ && %bedrag ^10,00$ && %direction ^Debit$|expenses:food:groceries|Groceries|
+%date ^20250110$ && %saldo ^178,01$ && %bedrag ^11,99$ && %direction ^Debit$|expenses:subscriptions|Spotify|vast:
+%date ^20250201$ && %saldo ^158,01$ && %bedrag ^20,00$ && %direction ^Debit$|expenses:food:groceries|Groceries|
+%date ^20250301$ && %saldo ^150,51$ && %bedrag ^7,50$ && %direction ^Debit$|expenses:food:groceries|Snacks|
+%date ^20250410$ && %saldo ^138,51$ && %bedrag ^12,00$ && %direction ^Debit$|expenses:food:drinks|Beer in Prague|reis:praag
+%date ^20250601$ && %saldo ^130,51$ && %bedrag ^8,00$ && %direction ^Debit$|expenses:food:groceries|Groceries|reis:gent
+%date ^20251230$ && %saldo ^0,00$ && %bedrag ^130,51$ && %direction ^Debit$|expenses:cash|Cash withdrawal|

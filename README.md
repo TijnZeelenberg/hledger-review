@@ -79,6 +79,18 @@ For each one you set:
   (for example `%payee`), with the pattern prefilled. It must match this
   transaction; it applies to every year.
 
+Under the list, a history panel shows the last five categorised
+transactions with the same bank name, from every year; if there are none,
+those with the same amount give or take a cent. `1`–`5` copy a row's
+description, account and tags into the form. The bank name of a categorised
+transaction comes from its CSV row, through the shared rules' top-level
+`description` (e.g. `%payee`). When the same bank name was categorised before,
+the form starts with the most frequent description, account and tags among
+those (ties go to the newest), marked "suggested from N earlier"; it is only
+saved when you save. Description and tags complete, in insert mode, from what
+the journal already has, most frequent first; tags complete the tag under the
+cursor, names and `name:value` pairs.
+
 Saving writes a line to the year's one-offs table, matching exactly that CSV
 row on its `row_key` fields:
 
@@ -132,6 +144,7 @@ where the search started; Esc afterwards ends the search, and `n` skips again.
 | w         | write (save); Enter in the account or tags field in insert mode too |
 | n         | next: skip this transaction; the next match while searching |
 | N         | the previous match while searching |
+| 1–5       | copy that row of the history panel into the form, in normal mode |
 | e         | edit the shared rules in `$VISUAL`/`$EDITOR`, then regenerate |
 | E         | edit this year's one-offs, then regenerate |
 | q         | quit |

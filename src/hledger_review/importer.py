@@ -412,6 +412,9 @@ def run_generate(config: Config, sources: Iterable[Source], years: list[int]) ->
 
 
 # review
+Key = tuple[str, Decimal | None, Decimal | None]  # date, amount, balance
+
+
 @dataclass
 class Item:
     """One transaction to review, and where it came from."""
@@ -445,7 +448,15 @@ def load_items(config: Config, since: str | None, visit_all: bool) -> list[Item]
 
 
 def locate(shared: Shared, year: int, txns: list[Txn], index: int) -> rules.Row | None:
-    """The CSV row behind TXNS[INDEX]: same date, amount and balance assertion.
+    """The CSV row behind TXNS[INDEX]; see `locate_all`."""
+    txn = txns[index]
+    peers = [t for t in txns if t.date == txn.date]  # rows only pair within a date
+    k = next(i for i, t in enumerate(peers) if t is txn)
+    return locate_all(shared, year, peers)[k]
+
+
+def locate_all(shared: Shared, year: int, txns: list[Txn]) -> list[rules.Row | None]:
+    """The CSV row behind each of TXNS: same date, amount and balance assertion.
 
     Rows that tie on all three pair up in order, the way hledger reads them.
     Without balance assertions only the date and the amount are compared.
@@ -453,25 +464,27 @@ def locate(shared: Shared, year: int, txns: list[Txn], index: int) -> rules.Row 
     source, ev = shared.source, shared.evaluator
     out_mark, csv_mark = shared.output_mark(), shared.directives.decimal_mark or "."
 
-    def journal_key(t: Txn) -> tuple[Decimal | None, Decimal | None]:
+    def journal_key(t: Txn) -> Key | None:
         p = next((p for p in t.postings() if p.account == source.account), None)
         if p is None:
-            return None, None
-        return rules.number(p.amount, out_mark), rules.number(p.assertion, out_mark)
+            return None
+        amount = rules.number(p.amount, out_mark)
+        return t.date, amount, rules.number(p.assertion, out_mark)
 
-    txn = txns[index]
-    wanted = journal_key(txn)
-    peers = [t for t in txns if t.date == txn.date and journal_key(t) == wanted]
     rows = [
         shared.row(r) for r in read_table(source.data(year), shared.directives).rows
     ]
     if len(rows) > 1 and str(ev.date(rows[0])) > str(ev.date(rows[-1])):
         rows.reverse()  # hledger reads a newest-first file bottom up
 
-    matches = []
+    keys = [journal_key(t) for t in txns]
+    wanted = {k for k in keys if k is not None}
+    dates = {k[0] for k in wanted}
+    asserted = {k for k in wanted if k[2] is not None}
+    queues: dict[Key, list[rules.Row]] = {}
     for row in rows:
         date = ev.date(row)
-        if date is None or date.isoformat() != txn.date:
+        if date is None or date.isoformat() not in dates:
             continue
         values = ev.assigned(shared.parsed, row)
         n = rules.posting(values, source.account)
@@ -479,7 +492,8 @@ def locate(shared: Shared, year: int, txns: list[Txn], index: int) -> rules.Row 
             continue
         amount = rules.posting_amount(values, n, csv_mark)
         balance = rules.posting_balance(values, n, csv_mark)
-        if (amount, balance if wanted[1] is not None else None) == wanted:
-            matches.append(row)
-    k = next(i for i, t in enumerate(peers) if t is txn)
-    return matches[k] if k < len(matches) else None
+        key = (date.isoformat(), amount, balance)
+        if key not in asserted:
+            key = (date.isoformat(), amount, None)
+        queues.setdefault(key, []).append(row)
+    return [queues[k].pop(0) if k is not None and queues.get(k) else None for k in keys]
