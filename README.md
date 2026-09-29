@@ -71,6 +71,8 @@ For each one you set:
 - a description,
 - an account, with completion from your existing accounts; a new account is
   confirmed first and can be declared in an accounts file,
+- optionally, [tags](https://hledger.org/hledger.html#tags), such as
+  `reis:gent, vast`,
 - optionally, the same result for every other listed transaction with the
   same name,
 - or, instead, a rule for the shared rules file, matching one CSV field
@@ -86,9 +88,18 @@ if|account1|description|comment
 ```
 
 A changed description clears the bank's comment; an unchanged one keeps it.
+Tags go in the comment column, after the kept comment if there is one:
+`bank text, reis:gent, vast:`. hledger ends a tag's value at a comma, so a
+colon in the bank text cannot swallow the tags. Tags are comma-separated `name:value` pairs; a bare
+`vast` is written as `vast:`, whitespace is tidied, `|` and line breaks
+separate tags like commas do, and a tag the comment already has is not added
+twice. A tag name must be one word. The tags apply to every transaction saved
+together (same name). To change or remove tags later, edit the one-offs (`E`).
+A table without a `comment` column cannot take tags. A rule's `comment` is
+the tags alone, or empty without tags, as before.
 Saving the same transaction again replaces its line. Then the year (every
 year, for a rule) is regenerated and the list reloads; transactions that a
-new rule categorised are ticked off too. `|` and line breaks cannot be saved,
+new rule categorised are ticked off too. Elsewhere, `|` and line breaks cannot be saved,
 since they would break the table. Quitting halfway loses nothing.
 
 To find a transaction's CSV row, review matches its date, its amount on the
@@ -109,7 +120,7 @@ are commands, including on a text field. Press `i` on a field to type in it
 | h / l     | to the list / to the form (Enter on a row also goes to the form) |
 | i         | insert mode on the current field |
 | Esc       | back to normal mode |
-| w         | write (save); Enter in the account field in insert mode too |
+| w         | write (save); Enter in the account or tags field in insert mode too |
 | n         | next: skip this transaction |
 | e         | edit the shared rules in `$VISUAL`/`$EDITOR`, then regenerate |
 | E         | edit this year's one-offs, then regenerate |
@@ -117,6 +128,10 @@ are commands, including on a text field. Press `i` on a field to type in it
 
 Use `--since YYYY-MM-DD` to limit the review. Use `--all` to also revisit
 transactions that are already categorised.
+
+On [Omarchy](https://omarchy.org) the TUI takes its colours from the active
+theme's `colors.toml`; elsewhere it uses Textual's `tokyo-night`. Set
+`$HLEDGER_REVIEW_THEME_DIR` to use another theme directory.
 
 **rules** matches every rule in the rules file against CSV data, the way
 hledger does, and prints one line per rule in the format compilers use:

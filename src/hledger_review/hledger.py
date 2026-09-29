@@ -70,13 +70,40 @@ def append_rule(
     account: str,
     description: str,
     account_field: str = "account2",
+    comment: str = "",
 ) -> None:
     """Append an `if %FIELD PATTERN` block; later rules override earlier ones."""
     with rules.open("a") as f:
         f.write(f"\nif %{field} {pattern}\n")
         f.write(f"  {account_field:<12} {account}\n")
         f.write(f"  description  {description}\n")
-        f.write("  comment\n")
+        f.write(f"  comment      {comment}\n" if comment else "  comment\n")
+
+
+# tags
+def normalise_tags(text: str) -> str:
+    """hledger tags from user input: `reis : gent| vast` -> `reis:gent, vast:`.
+
+    Commas, `|` and line breaks separate tags; a bare name gets a colon.
+    """
+    tags: list[str] = []
+    for part in re.split(r"[,|\r\n]", text):
+        name, colon, value = (" ".join(x.split()) for x in part.partition(":"))
+        if not name and not colon and not value:
+            continue
+        if not name or " " in name:
+            raise ValueError(f"a tag name must be one word: {part.strip()!r}")
+        tag = f"{name}:{value}"
+        if tag not in tags:
+            tags.append(tag)
+    return ", ".join(tags)
+
+
+def with_tags(comment: str, tags: str) -> str:
+    """COMMENT followed by the TAGS it does not have yet, comma-separated."""
+    have = {c.strip() for c in comment.split(",")}
+    new = [t for t in tags.split(", ") if t and t not in have]
+    return ", ".join(x for x in (comment, *new) if x)
 
 
 def one_off_matcher(key: Iterable[tuple[str, str]]) -> str:
@@ -84,11 +111,13 @@ def one_off_matcher(key: Iterable[tuple[str, str]]) -> str:
     return " && ".join(f"%{name} ^{rules_pattern(value)}$" for name, value in key)
 
 
-def set_one_off(rules: Path, matcher: str, values: dict[str, str]) -> None:
+def set_one_off(
+    rules: Path, matcher: str, values: dict[str, str], required: Iterable[str] = ()
+) -> None:
     """Add or replace MATCHER's line in the file's `if|...` table.
 
     Without a table, one is appended with the columns of VALUES; an existing
-    table's columns must all be in VALUES.
+    table's columns must all be in VALUES, and the REQUIRED ones in the table.
     """
     text = rules.read_text() if rules.exists() else ""
     lines = text.split("\n")
@@ -103,6 +132,9 @@ def set_one_off(rules: Path, matcher: str, values: dict[str, str]) -> None:
     unknown = [c for c in columns if c not in values]
     if unknown:
         raise ValueError(f"{rules}: cannot fill column {', '.join(unknown)}")
+    missing = [c for c in required if c not in columns]
+    if missing:
+        raise ValueError(f"{rules}: the table has no column {', '.join(missing)}")
     line = f"{matcher}|{'|'.join(values[c] for c in columns)}"
     end = header + 1
     while end < len(lines) and lines[end].strip():

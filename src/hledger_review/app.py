@@ -31,7 +31,7 @@ from textual.widgets import (
 )
 from textual_autocomplete import AutoComplete, DropdownItem
 
-from hledger_review import hledger, rules
+from hledger_review import hledger, rules, theme
 from hledger_review.config import Config, ConfigError, Source
 from hledger_review.importer import (
     Failed,
@@ -120,6 +120,8 @@ class ReviewApp(App[int]):
                 yield Label("Account", classes="field")
                 yield ModalInput(id="account")
                 yield Label("", id="new-account")
+                yield Label("Tags", classes="field")
+                yield ModalInput(id="tags", placeholder="e.g. reis:gent, vast")
                 yield Checkbox("", id="same")
                 yield Label(
                     "Or instead a shared rule", classes="field", id="rule-label"
@@ -132,7 +134,21 @@ class ReviewApp(App[int]):
                 yield Label("", id="rule-error")
         yield Footer()
 
+    def apply_theme(self) -> None:
+        """Follow the active Omarchy theme, else keep a built-in one."""
+        palette = theme.load_palette(theme.theme_dir())
+        if palette is None:
+            self.theme = theme.FALLBACK
+            return
+        # the ANSI colours first: the theme change rebuilds the filter using them
+        ansi = theme.terminal_theme(palette)
+        self.ansi_theme_dark = ansi
+        self.ansi_theme_light = ansi
+        self.register_theme(theme.textual_theme(palette))
+        self.theme = "omarchy"
+
     def on_mount(self) -> None:
+        self.apply_theme()
         self.sub_title = self.config.journal.name
         self.mount(
             AutoComplete(
@@ -214,6 +230,7 @@ class ReviewApp(App[int]):
         account = self.query_one("#account", Input)
         account.value = ""
         account.placeholder = t.account(self.roles)
+        self.query_one("#tags", Input).value = ""
         same = self.same_name(item)
         checkbox = self.query_one("#same", Checkbox)
         checkbox.label = (
@@ -314,7 +331,7 @@ class ReviewApp(App[int]):
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "desc":
             self.query_one("#account", Input).focus()
-        elif event.input.id in ("account", "pattern"):
+        elif event.input.id in ("account", "tags", "pattern"):
             self.action_save()
 
     # modes and movement
@@ -394,7 +411,9 @@ class ReviewApp(App[int]):
         for source, source_years in by_source.values():
             generate(self.config, source, sorted(set(source_years)))
 
-    def save_one_offs(self, group: list[Item], account: str, desc: str) -> None:
+    def save_one_offs(
+        self, group: list[Item], account: str, desc: str, tags: str = ""
+    ) -> None:
         """Write a one-off line per item, then regenerate their years."""
         lines: list[tuple[Path, str, dict[str, str]]] = []
         shared: dict[str, Shared] = {}
@@ -407,6 +426,7 @@ class ReviewApp(App[int]):
                 raise SaveError(f"no CSV row found for {item.txn.date} {desc}")
             key = s.key(row)
             comment = "" if desc != item.txn.description else item.txn.comment
+            comment = hledger.with_tags(comment, tags)
             rules_safe(*key, comment)
             values = {
                 source.rule_account: account,
@@ -419,11 +439,17 @@ class ReviewApp(App[int]):
         paths = [p for p, _, _ in lines] + [src.output(y) for src, y in years]
         with rollback(paths):
             for path, matcher, values in lines:
-                hledger.set_one_off(path, matcher, values)
+                hledger.set_one_off(path, matcher, values, ["comment"] if tags else [])
             self.regenerate(years)
 
     def save_rule(
-        self, item: Item, field: str, pattern: str, account: str, desc: str
+        self,
+        item: Item,
+        field: str,
+        pattern: str,
+        account: str,
+        desc: str,
+        tags: str = "",
     ) -> list[tuple[Source, int]]:
         """Append a rule to the shared rules, then regenerate every year."""
         source = item.source
@@ -435,7 +461,7 @@ class ReviewApp(App[int]):
         years = [(source, y) for y in source.years()]
         with rollback([source.rules] + [source.output(y) for _, y in years]):
             hledger.append_rule(
-                source.rules, field, pattern, account, desc, source.rule_account
+                source.rules, field, pattern, account, desc, source.rule_account, tags
             )
             self.regenerate(years)
         return years
@@ -473,12 +499,16 @@ class ReviewApp(App[int]):
         group = [t]
         try:
             rules_safe(desc, account, pattern)
+            try:
+                tags = hledger.normalise_tags(self.query_one("#tags", Input).value)
+            except ValueError as e:
+                raise SaveError(str(e)) from e
             if field:
-                item_years = self.save_rule(t, field, pattern, account, desc)
+                item_years = self.save_rule(t, field, pattern, account, desc, tags)
             else:
                 if self.query_one("#same", Checkbox).value:
                     group += self.same_name(t)
-                self.save_one_offs(group, account, desc)
+                self.save_one_offs(group, account, desc, tags)
                 item_years = [(o.source, o.year) for o in group]
         except SaveError as e:
             self.query_one("#rule-error", Label).update(str(e))

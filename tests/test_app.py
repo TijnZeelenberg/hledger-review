@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 from textual.widgets import Checkbox, DataTable, Input, RadioSet
 
+from hledger_review import hledger
 from hledger_review.app import ReviewApp
 from hledger_review.config import Config, load
 from hledger_review.importer import load_items, year_transactions
@@ -92,6 +93,48 @@ async def test_same_description_keeps_the_comment(workdir: Path) -> None:
     assert (t.description, t.comment) == ("Spotify AB", "Subscription")
 
 
+def tagged(config: Config, query: str) -> list[str]:
+    """Dates of the transactions hledger finds with `tag:QUERY`."""
+    out = hledger.run(config.journal, "print", f"tag:{query}").stdout
+    return [line.split()[0] for line in out.splitlines() if line[:1].isdigit()]
+
+
+async def test_tags_go_in_the_one_off_comment(workdir: Path) -> None:
+    config = load()
+    app = make_app(config)
+    async with app.run_test() as pilot:
+        app.query_one("#desc", Input).value = "Groceries"  # clears the notes
+        app.query_one("#account", Input).value = "expenses:food:groceries"
+        app.query_one("#tags", Input).value = " reis : gent| vast"
+        await pilot.pause()
+        await pilot.press("w")
+        assert app.changed == 2
+        assert app.query_one("#tags", Input).value == ""  # cleared for the next
+    assert one_offs(workdir)[1:] == [
+        f"{AH_03}|expenses:food:groceries|Groceries|reis:gent, vast:",
+        f"{AH_06}|expenses:food:groceries|Groceries|reis:gent, vast:",
+    ]
+    assert tagged(config, "reis=gent") == ["2026-01-03", "2026-01-06"]
+    assert tagged(config, "vast") == ["2026-01-03", "2026-01-06"]
+
+
+async def test_tags_follow_a_kept_comment(workdir: Path) -> None:
+    config = load()
+    app = make_app(config)
+    async with app.run_test() as pilot:
+        await pilot.press("n")  # on to Spotify AB, notes "Subscription"
+        app.query_one("#account", Input).value = "expenses:subscriptions"
+        app.query_one("#tags", Input).value = "vast"
+        await pilot.pause()
+        await pilot.press("w")
+    assert one_offs(workdir)[1:] == [
+        f"{SPOTIFY}|expenses:subscriptions|Spotify AB|Subscription, vast:"
+    ]
+    t = journal_txn(config, "2026-01-05")
+    assert t.comment == "Subscription, vast:"
+    assert tagged(config, "vast") == ["2026-01-05"]
+
+
 async def test_new_account_needs_confirmation_and_is_declared(workdir: Path) -> None:
     config = load()
     app = make_app(config)
@@ -132,6 +175,39 @@ async def test_learned_rule_is_appended_and_applied(workdir: Path) -> None:
     t = journal_txn(config, "2026-01-05")
     assert t.description == "Spotify"
     assert t.account(config.roles) == "expenses:subscriptions"
+
+
+async def test_tags_go_in_the_rule_comment(workdir: Path) -> None:
+    config = load()
+    app = make_app(config)
+    rules_before = (workdir / "bank.rules").read_text()
+    async with app.run_test() as pilot:
+        await pilot.press("n")
+        app.query_one("#account", Input).value = "expenses:subscriptions"
+        app.query_one("#tags", Input).value = "vast, muziek"
+        pick_rule_field(app)
+        await pilot.pause()
+        await pilot.press("w")
+        assert app.changed == 1
+    assert (workdir / "bank.rules").read_text() == rules_before + (
+        "\nif %payee Spotify AB\n"
+        "  account1     expenses:subscriptions\n"
+        "  description  Spotify AB\n"
+        "  comment      vast:, muziek:\n"
+    )
+    assert tagged(config, "muziek") == ["2026-01-05"]
+
+
+async def test_bad_tag_blocks_save(workdir: Path) -> None:
+    config = load()
+    before = files(workdir)
+    app = make_app(config)
+    async with app.run_test() as pilot:
+        app.query_one("#tags", Input).value = "city trip:gent"
+        await pilot.press("w")
+        assert app.changed == 0
+        assert "one word" in str(app.query_one("#rule-error").render())
+    assert files(workdir) == before
 
 
 @pytest.mark.parametrize(
@@ -194,6 +270,9 @@ async def test_keys_are_modal(workdir: Path) -> None:
         assert desc.value == before
         await pilot.press("j")  # next field
         assert app.focused is app.query_one("#account", ModalInput)
+        await pilot.press("j")
+        assert app.focused is app.query_one("#tags", ModalInput)
+        await pilot.press("k")
         await pilot.press("k", "i")  # back up, insert
         assert app.focused is desc and desc.editing
         assert app.sub_title.endswith("-- INSERT --")

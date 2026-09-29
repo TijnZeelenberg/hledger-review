@@ -1,25 +1,65 @@
+/* flat, Omarchy-like: thin borders, accent on focus, muted elsewhere */
+Screen { background: $background; }
+Header { background: $background; color: $text-muted; }
+HeaderIcon { color: $accent; }
+Footer { background: $background; }
+Horizontal { padding: 0 1; }
+* { scrollbar-size-vertical: 1; }
+
+/* panes */
+#list, #detail {
+    border: round $border-blurred;
+    border-title-color: $text-muted;
+    background: $background;
+}
+#list:focus, #detail:focus-within {
+    border: round $border;
+    border-title-color: $border;
+    border-title-style: bold;
+}
 #list {
     width: 48%;
-    border: round $primary;
-    border-title-color: $primary;
+    margin-right: 1;
+    background-tint: 0%;
 }
-#detail {
-    border: round $accent;
-    border-title-color: $accent;
-    padding: 0 1;
+#detail { padding: 0 1; }
+
+/* table */
+#list > .datatable--header {
+    background: $background;
+    color: $text-muted;
+    background-tint: 0%;
 }
+#list > .datatable--even-row { background: $background; }
+
+/* form */
 #info { margin-bottom: 1; }
 .field { color: $text-muted; margin-top: 1; }
+ModalInput, Checkbox {
+    border: round $border-blurred;
+    background: $background;
+    padding: 0 1;
+}
+ModalInput:focus, Checkbox:focus {
+    border: round $border;
+    background-tint: 0%;
+}
+ModalInput:disabled { border: round $border-blurred 50%; }
 #new-account { color: $warning; height: 1; }
-#rule-field { width: 100%; border: none; padding: 0; layout: horizontal; height: auto; }
+#rule-field { width: 100%; border: none; padding: 0; layout: horizontal; height: auto; background: $background; }
+#rule-field:focus { background-tint: 0%; }
 #rule-field RadioButton { width: auto; margin-right: 2; }
+#rule-field RadioButton > .toggle--button { background: $background; color: $text-muted; }
+#rule-field RadioButton.-on > .toggle--button { color: $success; }
+#same > .toggle--button { background: $background; color: $text-muted; }
+#same.-on > .toggle--button { color: $success; }
 #rule-error { color: $error; height: 1; }
 #same { margin-top: 1; }
 AutoComplete {
-    border: round $accent;
-    background: $panel;
+    border: round $border;
+    background: $background;
 }
-AutoComplete .autocomplete--highlight-match { color: $accent; }
+AutoComplete .autocomplete--highlight-match { color: $accent; text-style: bold; }
 
 /* insert mode */
-.-editing { border: tall $success; }
+ModalInput.-editing:focus { border: heavy $success; }

@@ -24,9 +24,10 @@ rule_account = "account1"
 
 @pytest.fixture(autouse=True)
 def isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Keep the developer's own $LEDGER_FILE and config out of the tests."""
+    """Keep the developer's own $LEDGER_FILE, config and theme out of the tests."""
     monkeypatch.delenv("LEDGER_FILE", raising=False)
     monkeypatch.delenv("HLEDGER_REVIEW_CONFIG", raising=False)
+    monkeypatch.setenv("HLEDGER_REVIEW_THEME_DIR", str(tmp_path / "no-theme"))
     monkeypatch.chdir(tmp_path)
 
 
