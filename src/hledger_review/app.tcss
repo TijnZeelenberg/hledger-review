@@ -3,7 +3,7 @@ Screen { background: $background; }
 Header { background: $background; color: $text-muted; }
 HeaderIcon { color: $accent; }
 Footer { background: $background; }
-Horizontal { padding: 0 1; }
+Screen > Horizontal { padding: 0 1; }
 * { scrollbar-size-vertical: 1; }
 
 /* panes */
@@ -32,9 +32,14 @@ Horizontal { padding: 0 1; }
 }
 #list > .datatable--even-row { background: $background; }
 
-/* form */
+/* form: a label column, the inputs beside it */
 #info { margin-bottom: 1; }
-.field { color: $text-muted; margin-top: 1; }
+.row { height: auto; }
+.field { width: 13; height: 3; content-align: left middle; color: $text-muted; }
+.row ModalInput, .row Checkbox { width: 1fr; }
+.note { margin-left: 13; }
+#rule-row { margin-top: 1; }
+#rule-row .field { height: 1; }
 ModalInput, Checkbox {
     border: round $border-blurred;
     background: $background;
@@ -45,8 +50,8 @@ ModalInput:focus, Checkbox:focus {
     background-tint: 0%;
 }
 ModalInput:disabled { border: round $border-blurred 50%; }
-#new-account { color: $warning; height: 1; }
-#rule-field { width: 100%; border: none; padding: 0; layout: horizontal; height: auto; background: $background; }
+#new-account { color: $warning; display: none; }
+#rule-field { width: 1fr; border: none; padding: 0; layout: horizontal; height: auto; background: $background; }
 #rule-field:focus { background-tint: 0%; }
 #rule-field RadioButton { width: auto; margin-right: 2; }
 #rule-field RadioButton > .toggle--button { background: $background; color: $text-muted; }
@@ -54,7 +59,6 @@ ModalInput:disabled { border: round $border-blurred 50%; }
 #same > .toggle--button { background: $background; color: $text-muted; }
 #same.-on > .toggle--button { color: $success; }
 #rule-error { color: $error; height: 1; }
-#same { margin-top: 1; }
 AutoComplete {
     border: round $border;
     background: $background;
@@ -63,3 +67,27 @@ AutoComplete .autocomplete--highlight-match { color: $accent; text-style: bold; 
 
 /* insert mode */
 ModalInput.-editing:focus { border: heavy $success; }
+
+/* status line: vim-like mode, the search, the key hints */
+#statusbar { dock: bottom; height: 1; padding: 0; }
+#mode {
+    width: auto;
+    padding: 0 1;
+    background: $accent;
+    color: $background;
+    text-style: bold;
+}
+#mode.-insert { background: $success; }
+#search-bar { display: none; width: auto; height: 1; padding: 0 0 0 1; }
+#slash { color: $accent; text-style: bold; }
+#search {
+    width: 2;
+    height: 1;
+    border: none;
+    padding: 0;
+    background: $background;
+}
+#search:focus { background-tint: 0%; }
+#matches { width: auto; color: $text-muted; padding: 0 1; }
+#matches.-none { color: $error; }
+#statusbar Footer { dock: none; width: 1fr; }

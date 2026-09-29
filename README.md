@@ -110,18 +110,28 @@ hledger reads them. Without balance assertions (no `balanceN` in the rules)
 only date and amount are compared, which is only as reliable as that order.
 
 Keys are vim-like and modal. Everything starts in normal mode, where letters
-are commands, including on a text field. Press `i` on a field to type in it
-(`-- INSERT --` shows in the title); Esc or leaving the field ends insert mode.
+are commands, including on a text field. Press `i` on a field to type in it;
+Esc or leaving the field ends insert mode. The status line at the bottom left
+shows `NORMAL` or `INSERT`.
+
+`/` searches the list: as you type, the cursor jumps to the next transaction
+whose name, notes or amount contains the text (case-insensitive; `,` and `.`
+are the same, so `23,99` finds `€-23.99`). The list itself is not filtered.
+Enter keeps the search, and while it shows in the status line `n` / `N` go to
+the next / previous match instead of skipping. Esc while typing goes back to
+where the search started; Esc afterwards ends the search, and `n` skips again.
 
 | Key       | Action |
 |-----------|--------|
 | j / k     | next / previous row in the list, or field in the form |
-| g / G     | first / last row |
+| g / G     | first / last row (in the list) |
+| /         | search the list; Enter keeps the search, Esc cancels or ends it |
 | h / l     | to the list / to the form (Enter on a row also goes to the form) |
 | i         | insert mode on the current field |
-| Esc       | back to normal mode |
+| Esc       | back to normal mode; else cancel or end the search |
 | w         | write (save); Enter in the account or tags field in insert mode too |
-| n         | next: skip this transaction |
+| n         | next: skip this transaction; the next match while searching |
+| N         | the previous match while searching |
 | e         | edit the shared rules in `$VISUAL`/`$EDITOR`, then regenerate |
 | E         | edit this year's one-offs, then regenerate |
 | q         | quit |
