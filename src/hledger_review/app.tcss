@@ -20,3 +20,6 @@ AutoComplete {
     background: $panel;
 }
 AutoComplete .autocomplete--highlight-match { color: $accent; }
+
+/* insert mode */
+.-editing { border: tall $success; }

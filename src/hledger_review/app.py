@@ -1,6 +1,9 @@
 """The review TUI: give imported transactions a description and an account."""
 
+import os
 import re
+import shlex
+import subprocess
 from typing import ClassVar
 
 from rich.table import Table
@@ -8,6 +11,7 @@ from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical
+from textual.widget import Widget
 from textual.widgets import (
     Checkbox,
     DataTable,
@@ -24,6 +28,11 @@ from textual_autocomplete import AutoComplete, DropdownItem
 from hledger_review import hledger
 from hledger_review.config import Config, Source
 from hledger_review.journal import Txn, declare_account, render, write_atomic
+from hledger_review.widgets import ListTable, ModalInput, ModeChanged
+
+
+def run_editor(command: list[str]) -> None:
+    subprocess.run(command, check=False)
 
 
 def amount_text(amount: str) -> Text:
@@ -36,9 +45,18 @@ class ReviewApp(App[int]):
     TITLE = "hledger-review"
     CSS_PATH = "app.tcss"
     BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("ctrl+s", "save", "Save", priority=True),
-        Binding("ctrl+n", "skip", "Skip", priority=True),
-        Binding("ctrl+q", "quit", "Quit", priority=True),
+        # vim-like and modal: fields only take text in insert mode (i on the
+        # field, Esc to leave), so letters are commands everywhere else
+        Binding("i", "insert", "Insert"),
+        Binding("escape", "normal", "Normal", show=False),
+        Binding("h", "to_list", "List", show=False),
+        Binding("l", "to_form", "Form", show=False),
+        Binding("j", "field(1)", "Next field", show=False),
+        Binding("k", "field(-1)", "Previous field", show=False),
+        Binding("w", "save", "Write"),
+        Binding("n", "skip", "Next"),
+        Binding("e", "edit_rules", "Edit rules"),
+        Binding("q", "quit", "Quit"),
     ]
 
     def __init__(
@@ -69,13 +87,13 @@ class ReviewApp(App[int]):
     def compose(self) -> ComposeResult:
         yield Header()
         with Horizontal():
-            yield DataTable(id="list", cursor_type="row", zebra_stripes=True)
+            yield ListTable(id="list")
             with Vertical(id="detail"):
                 yield Static(id="info")
                 yield Label("Description", classes="field")
-                yield Input(id="desc")
+                yield ModalInput(id="desc")
                 yield Label("Account", classes="field")
-                yield Input(id="account")
+                yield ModalInput(id="account")
                 yield Label("", id="new-account")
                 yield Checkbox("", id="same")
                 yield Label(
@@ -85,7 +103,7 @@ class ReviewApp(App[int]):
                     yield RadioButton("No rule", value=True)
                     for f in self.rule_fields[1:]:
                         yield RadioButton(f"Match %{f}")
-                yield Input(id="pattern", placeholder="regex", disabled=True)
+                yield ModalInput(id="pattern", placeholder="regex", disabled=True)
                 yield Label("", id="rule-error")
         yield Footer()
 
@@ -127,7 +145,7 @@ class ReviewApp(App[int]):
             Text.assemble(
                 ("All caught up. ", "bold green"),
                 f"No transactions on {self.roles.unmarked}.\n\n",
-                ("ctrl+q to quit", "dim"),
+                ("q to quit", "dim"),
             )
         )
 
@@ -198,11 +216,13 @@ class ReviewApp(App[int]):
         for offset in range(1, len(self.todo) + 1):
             i = (start + offset) % len(self.todo)
             if id(self.todo[i]) not in self.status:
+                in_form = isinstance(self.focused, Input)
                 table.move_cursor(row=i)
                 self.load(self.todo[i])
-                self.query_one("#desc", Input).focus()
+                # stay in the "mode" we were in: the form, or the list
+                (self.query_one("#desc", Input) if in_form else table).focus()
                 return
-        self.notify("All transactions reviewed. ctrl+q to quit.")
+        self.notify("All transactions reviewed. q to quit.")
 
     def mark(self, t: Txn, state: str) -> None:
         self.status[id(t)] = state
@@ -217,11 +237,12 @@ class ReviewApp(App[int]):
 
     # events
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
-        if event.row_key.value is not None:
+        if event.data_table.id == "list" and event.row_key.value is not None:
             self.load(self.txn_for_key(event.row_key.value))
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        self.query_one("#desc", Input).focus()
+        if event.data_table.id == "list":
+            self.query_one("#desc", Input).focus()
 
     def on_radio_set_changed(self, event: RadioSet.Changed) -> None:
         pattern = self.query_one("#pattern", Input)
@@ -247,6 +268,63 @@ class ReviewApp(App[int]):
         elif event.input.id in ("account", "pattern"):
             self.action_save()
 
+    # modes and movement
+    def list_table(self) -> DataTable[object]:
+        return self.query_one("#list", DataTable)
+
+    def form_fields(self) -> list[Widget]:
+        """Focusable widgets of the form, in focus order."""
+        form = self.query_one("#detail")
+        return [w for w in self.screen.focus_chain if form in w.ancestors]
+
+    def on_mode_changed(self, event: ModeChanged) -> None:
+        name = self.config.journal.name
+        self.sub_title = f"{name}  -- INSERT --" if event.editing else name
+
+    def action_insert(self) -> None:
+        """i: on a field, start typing in it; on the list, go to the form."""
+        if isinstance(self.focused, ModalInput):
+            self.focused.set_editing(True)
+        else:
+            self.action_to_form()
+
+    def action_normal(self) -> None:
+        """Esc: leave insert mode, staying on the field."""
+        if isinstance(self.focused, ModalInput):
+            self.focused.set_editing(False)
+
+    def action_to_list(self) -> None:
+        self.list_table().focus()
+
+    def action_to_form(self) -> None:
+        fields = self.form_fields()
+        if fields and self.focused not in fields:
+            fields[0].focus()
+
+    def action_field(self, delta: int) -> None:
+        fields = self.form_fields()
+        if self.focused in fields:
+            i = fields.index(self.focused) + delta
+            fields[max(0, min(i, len(fields) - 1))].focus()
+
+    def rules_source(self) -> Source | None:
+        """Whose rules `e` opens: the current transaction's source, else the first."""
+        source = self.source_of(self.current) if self.current else None
+        with_rules = [s for s in self.config.sources.values() if s.rules]
+        if source and source.rules:
+            return source
+        return with_rules[0] if with_rules else None
+
+    def action_edit_rules(self) -> None:
+        """e: open the rules file in $VISUAL/$EDITOR; the TUI waits meanwhile."""
+        source = self.rules_source()
+        if source is None or source.rules is None:
+            self.notify("No rules file configured.", severity="warning")
+            return
+        editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "vi"
+        with self.suspend():
+            run_editor([*shlex.split(editor), str(source.rules)])
+
     # actions
     def action_save(self) -> None:
         t = self.current
@@ -259,7 +337,7 @@ class ReviewApp(App[int]):
         if account not in self.accounts and account != self.confirm_new:
             self.confirm_new = account
             self.query_one("#new-account", Label).update(
-                f"'{account}' is a new account; ctrl+s again to create it"
+                f"'{account}' is a new account; save again (Enter or w) to create it"
             )
             return
 

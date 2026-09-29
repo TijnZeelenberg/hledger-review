@@ -44,11 +44,21 @@ The journal is rewritten in place after every save: only the description and
 the account change, so amounts, alignment, balance assertions and everything
 else stay byte for byte the same. Quitting halfway loses nothing.
 
-| Key    | Action |
-|--------|--------|
-| ctrl+s | save (Enter in the account field too) |
-| ctrl+n | skip |
-| ctrl+q | quit |
+Keys are vim-like and modal. Everything starts in normal mode, where letters
+are commands, including on a text field. Press `i` on a field to type in it
+(`-- INSERT --` shows in the title); Esc or leaving the field ends insert mode.
+
+| Key       | Action |
+|-----------|--------|
+| j / k     | next / previous row in the list, or field in the form |
+| g / G     | first / last row |
+| h / l     | to the list / to the form (Enter on a row also goes to the form) |
+| i         | insert mode on the current field |
+| Esc       | back to normal mode |
+| w         | write (save); Enter in the account field in insert mode too |
+| n         | next: skip this transaction |
+| e         | open the rules file in `$VISUAL`/`$EDITOR` |
+| q         | quit |
 
 Use `--since YYYY-MM-DD` to limit the review. Use `--all` to also revisit
 transactions that are already categorised.
