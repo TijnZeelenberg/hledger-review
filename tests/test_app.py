@@ -6,6 +6,7 @@ from textual.widgets import Checkbox, DataTable, Input, RadioSet
 
 from hledger_review import hledger
 from hledger_review.app import ReviewApp
+from hledger_review.completion import Complete, ModalAutoComplete, TagComplete
 from hledger_review.config import Config, load
 from hledger_review.importer import load_items, year_transactions
 from hledger_review.journal import Txn
@@ -340,3 +341,157 @@ async def test_e_and_shift_e_edit_and_regenerate(
     assert calls == [["nvim", "--clean", str(rules)], ["nvim", "--clean", one_offs]]
     t = journal_txn(config, "2026-01-05")
     assert t.account(config.roles) == "expenses:subscriptions"
+
+
+# history and suggestions
+def form(app: ReviewApp) -> tuple[str, ...]:
+    return tuple(
+        app.query_one(f"#{f}", Input).value for f in ("desc", "account", "tags")
+    )
+
+
+def hint(app: ReviewApp) -> str:
+    return str(app.query_one("#suggestion").render())
+
+
+async def test_history_and_suggestion_never_save(history_workdir: Path) -> None:
+    config = load()
+    before = files(history_workdir)
+    app = make_app(config)
+    async with app.run_test() as pilot:
+        history = app.query_one("#history", DataTable)
+        assert history.row_count == 4 and history.display
+        assert str(history.border_title).startswith("Same name")
+        row = history.get_row_at(0)
+        assert str(row[0]) == "1" and str(row[2]) == "€-8.00"
+        assert row[1:2] + row[3:] == [
+            "2025-06-01",
+            "expenses:food:groceries",
+            "Groceries",
+            "reis:gent",
+        ]
+        assert form(app) == ("Groceries", "expenses:food:groceries", "")
+        assert hint(app) == "suggested from 2 of 4 earlier"
+        await pilot.press("j")  # Spotify AB: only the same amount
+        assert str(history.border_title).startswith("Same amount")
+        assert history.row_count == 2
+        assert form(app) == ("Spotify AB", "", "")
+        assert not app.query_one("#suggestion").display
+        await pilot.press("j", "j")  # A Friend: nothing
+        assert not history.display
+        await pilot.press("q")
+    assert app.changed == 0
+    assert files(history_workdir) == before
+
+
+async def test_digits_copy_a_history_row(history_workdir: Path) -> None:
+    config = load()
+    app = make_app(config)
+    async with app.run_test() as pilot:
+        await pilot.press("j", "2")  # Spotify AB, from the list
+        assert form(app) == ("Spotify", "expenses:subscriptions", "vast")
+        assert hint(app) == "copied from 2025-01-10"
+        await pilot.press("l", "j", "1")  # in the form, normal mode
+        assert form(app) == ("Beer in Prague", "expenses:food:drinks", "reis:praag")
+        await pilot.press("5")  # no such row
+        assert form(app)[0] == "Beer in Prague"
+        await pilot.press("k", "i", "end", "3")  # insert mode: text
+        assert form(app)[0] == "Beer in Prague3"
+        assert app.changed == 0
+
+
+async def test_prefill_keeps_edited_fields(history_workdir: Path) -> None:
+    config = load()
+    app = make_app(config)
+    async with app.run_test() as pilot:
+        app.query_one("#tags", Input).value = "reis:gent"
+        app.fill("Other", "expenses:cash", "vast", only_untouched=True)
+        await pilot.pause()
+        assert form(app) == ("Groceries", "expenses:food:groceries", "reis:gent")
+
+
+async def test_history_follows_a_save(history_workdir: Path) -> None:
+    config = load()
+    app = make_app(config)
+    async with app.run_test() as pilot:
+        app.query_one("#same", Checkbox).value = False
+        app.query_one("#desc", Input).value = "Weekly shop"
+        await pilot.press("w")  # suggested account, own description
+        assert app.changed == 1
+        await pilot.press("h", "j")  # on to the other Albert Heijn
+        assert app.current is not None and app.current.txn.date == "2026-01-06"
+        history = app.query_one("#history", DataTable)
+        assert history.get_row_at(0)[1] == "2026-01-03"
+        assert history.get_row_at(0)[4] == "Weekly shop"
+        assert hint(app) == "suggested from 2 of 5 earlier"
+    t = journal_txn(config, "2026-01-03")
+    assert (t.description, t.account(config.roles)) == (
+        "Weekly shop",
+        "expenses:food:groceries",
+    )
+
+
+# completion
+async def test_tag_completion_replaces_only_the_token(history_workdir: Path) -> None:
+    config = load()
+    app = make_app(config)
+    async with app.run_test() as pilot:
+        dropdown = app.query_one(TagComplete)
+        tags = app.query_one("#tags", ModalInput)
+        await pilot.press("l", "j", "j", "i")
+        tags.value = ", vast"
+        tags.cursor_position = 0
+        await pilot.press(*"reis:")
+        await pilot.pause()
+        assert dropdown.display
+        options = dropdown.option_list
+        values = [
+            str(options.get_option_at_index(i).prompt)
+            for i in range(options.option_count)
+        ]
+        assert values == ["reis:praag", "reis:gent"]
+        await pilot.press("enter")
+        assert tags.value == "reis:praag, vast"
+        assert app.changed == 0
+
+
+async def test_description_completion(history_workdir: Path) -> None:
+    config = load()
+    app = make_app(config)
+    async with app.run_test() as pilot:
+        dropdown = app.query_one(Complete)
+        desc = app.query_one("#desc", ModalInput)
+        await pilot.press("l")
+        await pilot.pause()
+        assert not dropdown.display  # prefilled, but not in insert mode
+        await pilot.press("i")
+        desc.value = ""
+        await pilot.press(*"sho")
+        await pilot.pause()
+        assert not dropdown.display  # nothing matches
+        desc.value = ""
+        await pilot.press(*"pra")
+        await pilot.pause()
+        assert dropdown.display
+        await pilot.press("enter")
+        assert desc.value == "Beer in Prague"
+
+
+async def test_account_completion_needs_insert_mode(history_workdir: Path) -> None:
+    config = load()
+    app = make_app(config)
+    async with app.run_test() as pilot:
+        dropdown = next(
+            d for d in app.query(ModalAutoComplete) if type(d) is ModalAutoComplete
+        )
+        account = app.query_one("#account", ModalInput)
+        await pilot.press("j", "l", "j", "2")  # copying opens nothing
+        await pilot.pause()
+        assert account.value == "expenses:subscriptions" and not dropdown.display
+        await pilot.press("i")
+        account.value = ""
+        await pilot.press(*"subs")
+        await pilot.pause()
+        assert dropdown.display
+        await pilot.press("enter")
+        assert account.value == "expenses:subscriptions"

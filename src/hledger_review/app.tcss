@@ -17,9 +17,12 @@ Horizontal { padding: 0 1; }
     border-title-color: $border;
     border-title-style: bold;
 }
-#list {
+#left {
     width: 48%;
     margin-right: 1;
+}
+#list {
+    height: 1fr;
     background-tint: 0%;
 }
 #detail { padding: 0 1; }
@@ -60,6 +63,18 @@ AutoComplete {
     background: $background;
 }
 AutoComplete .autocomplete--highlight-match { color: $accent; text-style: bold; }
+
+/* history and suggestion */
+#history {
+    height: auto;
+    max-height: 9;
+    border: round $border-blurred;
+    border-title-color: $text-muted;
+    background: $background;
+}
+#history > .datatable--header { background: $background; color: $text-muted; }
+#history > .datatable--even-row, #history > .datatable--odd-row { background: $background; }
+#suggestion { color: $text-muted; text-style: italic; height: 1; }
 
 /* insert mode */
 ModalInput.-editing:focus { border: heavy $success; }

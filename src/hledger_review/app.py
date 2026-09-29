@@ -29,10 +29,12 @@ from textual.widgets import (
     RadioSet,
     Static,
 )
-from textual_autocomplete import AutoComplete, DropdownItem
+from textual_autocomplete import DropdownItem
 
-from hledger_review import hledger, rules, theme
+from hledger_review import completion, hledger, rules, theme
+from hledger_review.completion import Candidates, Complete, TagComplete
 from hledger_review.config import Config, ConfigError, Source
+from hledger_review.history import History
 from hledger_review.importer import (
     Failed,
     Item,
@@ -84,6 +86,9 @@ class ReviewApp(App[int]):
         Binding("e", "edit_rules", "Edit rules"),
         Binding("E", "edit_one_offs", "Edit one-offs", show=False),
         Binding("q", "quit", "Quit"),
+        # digits copy a row of the history panel into the form
+        Binding("1", "copy(1)", "Copy", key_display="1-5"),
+        *(Binding(str(n), f"copy({n})", show=False) for n in range(2, 6)),
     ]
 
     def __init__(
@@ -91,6 +96,8 @@ class ReviewApp(App[int]):
         config: Config,
         todo: list[Item],
         accounts: list[str] | None = None,
+        history: History | None = None,
+        candidates: Candidates | None = None,
     ) -> None:
         super().__init__()
         self.config = config
@@ -108,13 +115,23 @@ class ReviewApp(App[int]):
         self.current: Item | None = None
         self.changed = 0
         self.confirm_new: str | None = None
+        self.history = history if history is not None else History(config)
+        self.candidates = (
+            candidates
+            if candidates is not None
+            else completion.load(config.journal, config.unmarked)
+        )
+        self.shown: list[str] = []  # keys of the history panel's rows
 
     def compose(self) -> ComposeResult:
         yield Header()
         with Horizontal():
-            yield ListTable(id="list")
+            with Vertical(id="left"):
+                yield ListTable(id="list")
+                yield DataTable(id="history", cursor_type="none")
             with Vertical(id="detail"):
                 yield Static(id="info")
+                yield Label("", id="suggestion")
                 yield Label("Description", classes="field")
                 yield ModalInput(id="desc")
                 yield Label("Account", classes="field")
@@ -151,11 +168,18 @@ class ReviewApp(App[int]):
         self.apply_theme()
         self.sub_title = self.config.journal.name
         self.mount(
-            AutoComplete(
+            completion.ModalAutoComplete(
                 "#account",
                 candidates=lambda _: [DropdownItem(a) for a in self.accounts],
-            )
+            ),
+            Complete("#desc", lambda: self.candidates.descriptions),
+            TagComplete("#tags", lambda: self.candidates.tags),
         )
+        history = self.query_one("#history", DataTable)
+        history.can_focus = False
+        history.display = False
+        for label in ("#", "Date", "Amount", "Account", "Description", "Tags"):
+            history.add_column(label)
         table = self.query_one("#list", DataTable)
         table.add_column(" ", key="status", width=1)
         table.add_column("Date", key="date")
@@ -239,6 +263,64 @@ class ReviewApp(App[int]):
         checkbox.value = bool(same)
         checkbox.display = bool(same)
         self.load_rule_fields(item.source)
+        self.show_history(item)
+
+    # history
+    def show_history(self, item: Item) -> None:
+        """Fill the history panel and pre-fill the form's untouched fields."""
+        found, by_payee = self.history.earlier(item.key)
+        found = found[:5]
+        self.shown = [b.key for b in found]
+        table = self.query_one("#history", DataTable)
+        table.clear()
+        for n, b in enumerate(found, start=1):
+            table.add_row(
+                Text(str(n), style="dim"),
+                b.date,
+                amount_text(b.amount),
+                b.account,
+                b.description,
+                b.tags,
+            )
+        table.display = bool(found)
+        what = "Same name" if by_payee else "Same amount ±€0.01"
+        table.border_title = f"{what} · 1-{len(found)} to copy"
+        hint = self.query_one("#suggestion", Label)
+        suggestion = self.history.suggest(item.key)
+        if suggestion is None or item.txn.account(self.roles) != self.roles.unmarked:
+            hint.update("")
+            hint.display = False
+            return
+        b = suggestion.booking
+        hint.update(suggestion.hint)
+        hint.display = True
+        self.fill(b.description, b.account, b.tags, only_untouched=True)
+
+    def fill(
+        self, desc: str, account: str, tags: str, only_untouched: bool = False
+    ) -> None:
+        """Put values in the form; ONLY_UNTOUCHED skips fields changed since load."""
+        t = self.current.txn if self.current else None
+        defaults = {"#desc": t.description if t else "", "#account": "", "#tags": ""}
+        for selector, value in (
+            ("#desc", desc),
+            ("#account", account),
+            ("#tags", tags),
+        ):
+            field = self.query_one(selector, Input)
+            if not only_untouched or field.value == defaults[selector]:
+                field.value = value
+
+    def action_copy(self, n: int) -> None:
+        """1-5: copy that history row's account, description and tags."""
+        if self.current is None or n > len(self.shown):
+            self.bell()
+            return
+        b = self.history.by_key[self.shown[n - 1]]
+        self.fill(b.description, b.account, b.tags)
+        hint = self.query_one("#suggestion", Label)
+        hint.update(f"copied from {b.date}")
+        hint.display = True
 
     def load_rule_fields(self, source: Source) -> None:
         """Offer only the rule fields of this transaction's source."""
@@ -279,6 +361,7 @@ class ReviewApp(App[int]):
         """Re-read regenerated years; items that changed count as done."""
         table = self.query_one("#list", DataTable)
         for source, year in {(s.name, y): (s, y) for s, y in years}.values():
+            self.history.refresh(source, year)
             fresh = year_transactions(source, year)
             for item in self.todo:
                 if item.source is not source or item.year != year:
