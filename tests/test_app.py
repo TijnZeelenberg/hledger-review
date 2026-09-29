@@ -2,7 +2,7 @@ import contextlib
 from pathlib import Path
 
 import pytest
-from textual.widgets import Checkbox, DataTable, Input, RadioSet
+from textual.widgets import Checkbox, DataTable, Input, RadioSet, Static
 
 from hledger_review import hledger
 from hledger_review.app import ReviewApp
@@ -41,6 +41,10 @@ def one_offs(workdir: Path) -> list[str]:
 
 def files(workdir: Path) -> dict[Path, bytes]:
     return {p: p.read_bytes() for p in workdir.rglob("*") if p.is_file()}
+
+
+def mode_text(app: ReviewApp) -> str:
+    return str(app.query_one("#mode", Static).render())
 
 
 def pick_rule_field(app: ReviewApp) -> None:
@@ -240,7 +244,7 @@ async def test_launches_with_nothing_to_review(workdir: Path) -> None:
     app = ReviewApp(config, [], accounts=list(ACCOUNTS))
     async with app.run_test() as pilot:
         assert app.query_one("#detail").border_title == "Nothing to review"
-        assert not app.query_one("#desc", Input).display
+        assert not any(row.display for row in app.query(".row"))
         await pilot.press("w", "n")
         assert app.changed == 0
         await pilot.press("q")
@@ -275,12 +279,14 @@ async def test_keys_are_modal(workdir: Path) -> None:
         await pilot.press("k")
         await pilot.press("k", "i")  # back up, insert
         assert app.focused is desc and desc.editing
-        assert app.sub_title.endswith("-- INSERT --")
+        assert mode_text(app) == "INSERT"
+        assert app.sub_title == "main.journal"
         desc.value = ""
         await pilot.press("w", "n", "q", "h", "j")  # insert mode: all text
         assert desc.value == "wnqhj" and app.changed == 0 and app.is_running
         await pilot.press("escape")  # normal again, still on the field
         assert app.focused is desc and not desc.editing
+        assert mode_text(app) == "NORMAL"
         await pilot.press("h")
         assert isinstance(app.focused, DataTable)
         await pilot.press("G")
@@ -340,3 +346,112 @@ async def test_e_and_shift_e_edit_and_regenerate(
     assert calls == [["nvim", "--clean", str(rules)], ["nvim", "--clean", one_offs]]
     t = journal_txn(config, "2026-01-05")
     assert t.account(config.roles) == "expenses:subscriptions"
+
+
+# layout
+async def test_form_fits_at_120_by_34(workdir: Path) -> None:
+    config = load()
+    app = make_app(config)
+    async with app.run_test(size=(120, 34)):
+        bottom = app.query_one("#detail").content_region.bottom
+        for field in ("#desc", "#account", "#tags", "#same", "#pattern", "#rule-error"):
+            region = app.query_one(field).region
+            assert region.height and region.bottom <= bottom, field
+
+
+async def test_form_saves_through_keys(workdir: Path) -> None:
+    config = load()
+    app = make_app(config)
+    async with app.run_test(size=(120, 34)) as pilot:
+        await pilot.press("l", "i", "ctrl+u", *"Groceries", "escape")
+        await pilot.press("j", "i", *"expenses:food:groceries", "escape", "escape")
+        await pilot.press("j", "i", *"vast", "enter")
+        assert app.changed == 2
+    assert one_offs(workdir)[1:] == [
+        f"{AH_03}|expenses:food:groceries|Groceries|vast:",
+        f"{AH_06}|expenses:food:groceries|Groceries|vast:",
+    ]
+
+
+async def test_mode_indicator(workdir: Path) -> None:
+    config = load()
+    app = make_app(config)
+    async with app.run_test() as pilot:
+        mode = app.query_one("#mode", Static)
+        assert mode_text(app) == "NORMAL" and not mode.has_class("-insert")
+        await pilot.press("l", "i")
+        assert mode_text(app) == "INSERT" and mode.has_class("-insert")
+        await pilot.press("escape")
+        assert mode_text(app) == "NORMAL" and not mode.has_class("-insert")
+
+
+# search
+def row(app: ReviewApp) -> int:
+    return app.query_one("#list", DataTable).cursor_row
+
+
+def matches_text(app: ReviewApp) -> str:
+    return str(app.query_one("#matches", Static).render())
+
+
+async def test_search_jumps_as_you_type_and_n_cycles(workdir: Path) -> None:
+    config = load()
+    app = make_app(config)
+    async with app.run_test() as pilot:
+        await pilot.press("slash", *"fri")
+        assert row(app) == 3 and matches_text(app) == "1/2"
+        await pilot.press("enter")
+        assert isinstance(app.focused, DataTable)
+        await pilot.press("n")
+        assert row(app) == 4 and matches_text(app) == "2/2"
+        await pilot.press("n")  # wraps around
+        assert row(app) == 3
+        await pilot.press("N")
+        assert row(app) == 4
+        assert app.status == {}  # n searched, it did not skip
+        await pilot.press("g")
+        assert row(app) == 0
+        await pilot.press("G")
+        assert row(app) == 4
+        await pilot.press("escape")  # clears the search: n skips again
+        assert not app.query_one("#search-bar").display
+        assert app.current is not None
+        last = app.current.key
+        await pilot.press("n")
+        assert app.status == {last: "skipped"}
+
+
+async def test_search_matches_notes_and_amounts(workdir: Path) -> None:
+    config = load()
+    app = make_app(config)
+    async with app.run_test() as pilot:
+        await pilot.press("j", "j", "slash", *"11,99")  # amount, comma or dot
+        assert row(app) == 1
+        await pilot.press("escape", "slash", *"paid back")  # notes
+        assert app.current is not None and app.current.txn.comment == "Paid back"
+
+
+async def test_escape_cancels_the_search_where_it_started(workdir: Path) -> None:
+    config = load()
+    app = make_app(config)
+    async with app.run_test() as pilot:
+        await pilot.press("j", "slash", *"friend")
+        assert row(app) == 3
+        await pilot.press("escape")
+        assert row(app) == 1 and isinstance(app.focused, DataTable)
+        assert not app.query_one("#search-bar").display
+        await pilot.press("slash", *"zzz")
+        assert row(app) == 1 and matches_text(app) == "no match"
+        await pilot.press("enter")  # nothing found: nothing to keep
+        assert not app.query_one("#search-bar").display
+        assert isinstance(app.focused, DataTable)
+
+
+async def test_search_keys_are_text_in_insert_mode(workdir: Path) -> None:
+    config = load()
+    app = make_app(config)
+    async with app.run_test() as pilot:
+        desc = app.query_one("#desc", ModalInput)
+        await pilot.press("l", "i", "ctrl+u", "slash", "g", "G", "n", "N")
+        assert desc.value == "/gGnN" and row(app) == 0
+        assert not app.query_one("#search-bar").display

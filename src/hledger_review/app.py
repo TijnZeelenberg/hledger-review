@@ -54,6 +54,9 @@ def amount_text(amount: str) -> Text:
     return Text(amount, style="bold red" if "-" in amount else "bold green")
 
 
+LABEL_WIDTH = 13  # .field in app.tcss, so details line up with the inputs
+
+
 class SaveError(Exception):
     """Why a save could not be written."""
 
@@ -80,7 +83,11 @@ class ReviewApp(App[int]):
         Binding("j", "field(1)", "Next field", show=False),
         Binding("k", "field(-1)", "Previous field", show=False),
         Binding("w", "save", "Write"),
+        # n/N find the next/previous match while a search is shown, else n skips
+        Binding("n", "search_next(1)", "Next match"),
+        Binding("N", "search_next(-1)", "Previous match", show=False),
         Binding("n", "skip", "Next"),
+        Binding("slash", "search", "Search"),
         Binding("e", "edit_rules", "Edit rules"),
         Binding("E", "edit_one_offs", "Edit one-offs", show=False),
         Binding("q", "quit", "Quit"),
@@ -108,6 +115,9 @@ class ReviewApp(App[int]):
         self.current: Item | None = None
         self.changed = 0
         self.confirm_new: str | None = None
+        self.search_active = False
+        self.search_origin = 0
+        self.search_return: Widget | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -115,24 +125,36 @@ class ReviewApp(App[int]):
             yield ListTable(id="list")
             with Vertical(id="detail"):
                 yield Static(id="info")
-                yield Label("Description", classes="field")
-                yield ModalInput(id="desc")
-                yield Label("Account", classes="field")
-                yield ModalInput(id="account")
-                yield Label("", id="new-account")
-                yield Label("Tags", classes="field")
-                yield ModalInput(id="tags", placeholder="e.g. reis:gent, vast")
-                yield Checkbox("", id="same")
-                yield Label(
-                    "Or instead a shared rule", classes="field", id="rule-label"
-                )
-                with RadioSet(id="rule-field"):
-                    yield RadioButton("No rule", value=True)
-                    for f in self.rule_fields[1:]:
-                        yield RadioButton(f"Match %{f}")
-                yield ModalInput(id="pattern", placeholder="regex", disabled=True)
-                yield Label("", id="rule-error")
-        yield Footer()
+                with Horizontal(classes="row"):
+                    yield Label("Description", classes="field")
+                    yield ModalInput(id="desc")
+                with Horizontal(classes="row"):
+                    yield Label("Account", classes="field")
+                    yield ModalInput(id="account")
+                yield Label("", id="new-account", classes="note")
+                with Horizontal(classes="row"):
+                    yield Label("Tags", classes="field")
+                    yield ModalInput(id="tags", placeholder="e.g. reis:gent, vast")
+                with Horizontal(classes="row", id="same-row"):
+                    yield Label("Same name", classes="field")
+                    yield Checkbox("", id="same")
+                with Horizontal(classes="row", id="rule-row"):
+                    yield Label("Shared rule", classes="field")
+                    with RadioSet(id="rule-field"):
+                        yield RadioButton("none", value=True)
+                        for f in self.rule_fields[1:]:
+                            yield RadioButton(f"%{f}")
+                with Horizontal(classes="row", id="pattern-row"):
+                    yield Label("Pattern", classes="field")
+                    yield ModalInput(id="pattern", placeholder="regex", disabled=True)
+                yield Label("", id="rule-error", classes="note")
+        with Horizontal(id="statusbar"):
+            yield Static("NORMAL", id="mode")
+            with Horizontal(id="search-bar"):
+                yield Label("/", id="slash")
+                yield Input(id="search")
+                yield Static(id="matches")
+            yield Footer()
 
     def apply_theme(self) -> None:
         """Follow the active Omarchy theme, else keep a built-in one."""
@@ -213,7 +235,7 @@ class ReviewApp(App[int]):
         self.current = item
         t = item.txn
         info = Table.grid(padding=(0, 2))
-        info.add_column(style="dim")
+        info.add_column(style="dim", width=LABEL_WIDTH)
         info.add_column()
         info.add_row("date", Text(t.date, style="bold"))
         info.add_row("amount", amount_text(t.amount(self.roles)))
@@ -233,11 +255,9 @@ class ReviewApp(App[int]):
         self.query_one("#tags", Input).value = ""
         same = self.same_name(item)
         checkbox = self.query_one("#same", Checkbox)
-        checkbox.label = (
-            f"Apply to {len(same)} other transaction(s) named '{t.description}'"
-        )
+        checkbox.label = f"Apply to {len(same)} more with this name"
         checkbox.value = bool(same)
-        checkbox.display = bool(same)
+        self.query_one("#same-row").display = bool(same)
         self.load_rule_fields(item.source)
 
     def load_rule_fields(self, source: Source) -> None:
@@ -247,7 +267,7 @@ class ReviewApp(App[int]):
         for f, button in zip(self.rule_fields, buttons, strict=True):
             button.display = not f or f in fields
         buttons[0].value = True
-        for widget in ("#rule-label", "#rule-field", "#pattern", "#rule-error"):
+        for widget in ("#rule-row", "#pattern-row", "#rule-error"):
             self.query_one(widget).display = bool(fields)
         self.query_one("#rule-error", Label).update("")
 
@@ -324,12 +344,17 @@ class ReviewApp(App[int]):
         pattern.value = hledger.rules_pattern(text)
 
     def on_input_changed(self, event: Input.Changed) -> None:
-        if event.input.id == "account":
+        if event.input.id == "search":
+            if self.search_active:
+                self.search_jump(self.search_origin, 1)
+        elif event.input.id == "account":
             self.confirm_new = None
-            self.query_one("#new-account", Label).update("")
+            self.query_one("#new-account", Label).display = False
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id == "desc":
+        if event.input.id == "search":
+            self.confirm_search()
+        elif event.input.id == "desc":
             self.query_one("#account", Input).focus()
         elif event.input.id in ("account", "tags", "pattern"):
             self.action_save()
@@ -344,8 +369,9 @@ class ReviewApp(App[int]):
         return [w for w in self.screen.focus_chain if form in w.ancestors]
 
     def on_mode_changed(self, event: ModeChanged) -> None:
-        name = self.config.journal.name
-        self.sub_title = f"{name}  -- INSERT --" if event.editing else name
+        mode = self.query_one("#mode", Static)
+        mode.update("INSERT" if event.editing else "NORMAL")
+        mode.set_class(event.editing, "-insert")
 
     def action_insert(self) -> None:
         """i: on a field, start typing in it; on the list, go to the form."""
@@ -355,9 +381,15 @@ class ReviewApp(App[int]):
             self.action_to_form()
 
     def action_normal(self) -> None:
-        """Esc: leave insert mode, staying on the field."""
-        if isinstance(self.focused, ModalInput):
-            self.focused.set_editing(False)
+        """Esc: leave insert mode, else cancel or clear the search."""
+        focused = self.focused
+        if isinstance(focused, ModalInput) and focused.editing:
+            focused.set_editing(False)
+        elif focused is self.query_one("#search", Input):
+            self.list_table().move_cursor(row=self.search_origin)
+            self.clear_search()
+        elif self.search_active:
+            self.clear_search()
 
     def action_to_list(self) -> None:
         self.list_table().focus()
@@ -372,6 +404,97 @@ class ReviewApp(App[int]):
         if self.focused in fields:
             i = fields.index(self.focused) + delta
             fields[max(0, min(i, len(fields) - 1))].focus()
+
+    # search
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if action == "search_next":
+            return self.search_active
+        return True
+
+    def search_matches(self, query: str) -> list[int]:
+        """Rows whose name, notes or amount contain QUERY, ignoring case."""
+
+        def norm(text: str) -> str:
+            return text.casefold().replace(",", ".")
+
+        q = norm(query)
+        return [
+            i
+            for i, item in enumerate(self.todo)
+            if any(
+                q in norm(text)
+                for text in (
+                    item.txn.description,
+                    item.txn.comment,
+                    item.txn.amount(self.roles),
+                )
+            )
+        ]
+
+    def search_jump(self, start: int, step: int) -> None:
+        """Move to the first match from row START on, in direction STEP."""
+        search = self.query_one("#search", Input)
+        query = search.value
+        search.styles.width = len(query) + 2  # grows as you type, like vim's
+        matches = self.search_matches(query) if query else []
+        table = self.list_table()
+        count = len(self.todo)
+        target = next(
+            (
+                i
+                for i in ((start + step * n) % count for n in range(count))
+                if i in matches
+            ),
+            self.search_origin,
+        )
+        table.move_cursor(row=target)
+        label = self.query_one("#matches", Static)
+        label.set_class(bool(query) and not matches, "-none")
+        if not query:
+            label.update("")
+        elif not matches:
+            label.update("no match")
+        else:
+            label.update(f"{matches.index(target) + 1}/{len(matches)}")
+
+    def action_search(self) -> None:
+        """/: jump through the list as you type a name, notes or amount."""
+        if not self.todo:
+            return
+        self.search_origin = self.list_table().cursor_row
+        if self.focused is not self.query_one("#search", Input):
+            self.search_return = self.focused
+        self.search_active = True
+        self.refresh_bindings()
+        self.query_one("#search-bar").display = True
+        self.query_one("#matches", Static).update("")
+        search = self.query_one("#search", Input)
+        search.value = ""
+        search.focus()
+
+    def confirm_search(self) -> None:
+        """Enter: keep the match and the search, for n/N; clear a failed one."""
+        if self.query_one("#matches", Static).has_class("-none"):
+            self.notify("No match.", severity="warning")
+            self.clear_search()
+        elif not self.query_one("#search", Input).value:
+            self.clear_search()
+        else:
+            self.list_table().focus()
+
+    def clear_search(self) -> None:
+        self.search_active = False
+        self.refresh_bindings()
+        search = self.query_one("#search", Input)
+        if self.focused is search:
+            back = self.search_return
+            (back if back is not None and back.display else self.list_table()).focus()
+        search.value = ""
+        self.query_one("#search-bar").display = False
+
+    def action_search_next(self, step: int) -> None:
+        """n/N: the next/previous match of the search."""
+        self.search_jump(self.list_table().cursor_row + step, step)
 
     def edit(self, path: Path, years: list[tuple[Source, int]]) -> None:
         """Open PATH in $VISUAL/$EDITOR, then regenerate YEARS and reload."""
@@ -477,9 +600,9 @@ class ReviewApp(App[int]):
         )
         if account not in self.accounts and account != self.confirm_new:
             self.confirm_new = account
-            self.query_one("#new-account", Label).update(
-                f"'{account}' is a new account; save again (Enter or w) to create it"
-            )
+            note = self.query_one("#new-account", Label)
+            note.update(f"'{account}' is new; save again (Enter or w) to create it")
+            note.display = True
             return
 
         radio = self.query_one("#rule-field", RadioSet)
