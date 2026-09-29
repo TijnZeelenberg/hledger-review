@@ -96,3 +96,16 @@ async def test_invalid_rule_pattern_blocks_save(workdir: Path) -> None:
         app.query_one("#pattern", Input).value = "(unclosed"
         await pilot.press("ctrl+s")
         assert app.changed == 0
+
+
+async def test_launches_with_nothing_to_review(workdir: Path) -> None:
+    config = load()
+    segments = parse_journal(config.journal.read_text())
+    app = ReviewApp(config, segments, [], accounts=list(ACCOUNTS))
+    async with app.run_test() as pilot:
+        assert app.query_one("#detail").border_title == "Nothing to review"
+        assert not app.query_one("#desc", Input).display
+        await pilot.press("ctrl+s", "ctrl+n")
+        assert app.changed == 0
+        await pilot.press("ctrl+q")
+    assert app.return_value == 0

@@ -114,6 +114,22 @@ class ReviewApp(App[int]):
         table.focus()
         if self.todo:
             self.load(self.todo[0])
+        else:
+            self.show_empty()
+
+    def show_empty(self) -> None:
+        """Nothing to review: say so instead of showing an empty form."""
+        detail = self.query_one("#detail", Vertical)
+        detail.border_title = "Nothing to review"
+        for widget in detail.children:
+            widget.display = widget.id == "info"
+        self.query_one("#info", Static).update(
+            Text.assemble(
+                ("All caught up. ", "bold green"),
+                f"No transactions on {self.roles.unmarked}.\n\n",
+                ("ctrl+q to quit", "dim"),
+            )
+        )
 
     # state helpers
     def source_of(self, t: Txn) -> Source | None:

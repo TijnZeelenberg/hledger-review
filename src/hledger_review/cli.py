@@ -38,10 +38,6 @@ def review(config: Config, since: str | None, visit_all: bool) -> int:
 
     todo = [t for t in txns if selected(t)]
     console = Console()
-    if not todo:
-        console.print("[green]nothing to review[/]")
-        return 0
-
     changed = ReviewApp(config, segments, todo).run() or 0
 
     remaining = sum(1 for t in txns if roles.unmarked in t.accounts())
