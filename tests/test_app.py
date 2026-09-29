@@ -610,3 +610,15 @@ async def test_account_completion_needs_insert_mode(history_workdir: Path) -> No
         assert dropdown.display
         await pilot.press("enter")
         assert account.value == "expenses:subscriptions"
+
+
+# layout and suggestions together
+async def test_digits_are_text_in_insert_mode_and_search(history_workdir: Path) -> None:
+    config = load()
+    app = make_app(config)
+    async with app.run_test() as pilot:
+        await pilot.press("l", "i", "ctrl+u", "1", "2")
+        assert app.query_one("#desc", Input).value == "12"
+        await pilot.press("escape", "h", "slash", "1", "2")
+        assert app.query_one("#search", Input).value == "12"
+        assert app.query_one("#desc", Input).value == "12"
