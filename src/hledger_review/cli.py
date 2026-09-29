@@ -1,4 +1,4 @@
-"""Command line: `hledger-review [review] ...` and `hledger-review import ...`.
+"""Command line: `hledger-review [review|import|rules] ...`.
 
 Installed on PATH, it also works as an hledger add-on: `hledger review`.
 """
@@ -9,8 +9,15 @@ from pathlib import Path
 
 from rich.console import Console
 
-from hledger_review import __version__, hledger
-from hledger_review.config import Config, ConfigError, load
+from hledger_review import __version__, hledger, rules
+from hledger_review.config import (
+    Config,
+    ConfigError,
+    Source,
+    load,
+    load_sources,
+    pick_source,
+)
 from hledger_review.importer import run_import
 from hledger_review.journal import Txn, parse_journal
 
@@ -52,6 +59,78 @@ def review(config: Config, since: str | None, visit_all: bool) -> int:
         console.print("hledger check: " + ("[green]OK[/]" if ok else "[red]FAILED[/]"))
         return 0 if ok else 1
     return 0
+
+
+def rule_stats(
+    config_arg: str | None,
+    source_name: str | None,
+    rules_arg: Path | None,
+    csvs: list[Path],
+    stdin: bool,
+) -> int:
+    """Print how often each rule matches, one `FILE:LINE: level: text` per rule."""
+    sources = load_sources(config_arg)
+    source: Source | None
+    if rules_arg is None:
+        source = pick_source(sources, source_name)
+        if source.rules is None:
+            raise ConfigError(f"source {source.name!r} has no rules file")
+        path = source.rules
+    else:
+        path = rules_arg
+        wanted = rules_arg.resolve()
+        source = next(
+            (s for s in sources.values() if s.rules and s.rules.resolve() == wanted),
+            None,
+        )
+    if not csvs:
+        default = source.csv if source and source.csv else path.with_suffix("")
+        csvs = [default]
+    missing = [str(c) for c in csvs if not c.is_file()]
+    if missing:
+        raise ConfigError(f"no such CSV file: {', '.join(missing)}")
+
+    text = sys.stdin.read() if stdin else path.read_text()
+    parsed = rules.parse(text)
+    category = source.rule_account if source else None
+    report = rules.stats(parsed, rules.read_rows(csvs, parsed.directives), category)
+
+    for s in report.rules:
+        print(f"{path}:{s.rule.line}: {describe(s)}")
+    summary = f"{plural(report.rows, 'row')} from {plural(len(csvs), 'CSV file')}"
+    if category:
+        summary += f", {report.fallthrough} set no {category}"
+    print(summary, file=sys.stderr)
+    return 0
+
+
+def plural(n: int, noun: str) -> str:
+    return f"{n} {noun}{'' if n == 1 else 's'}"
+
+
+def describe(s: rules.RuleStats) -> str:
+    """One rule's stats as `level: text`, the way compilers report."""
+    if s.error:
+        return f"error: {s.error}"
+    if not s.rows:
+        return "warning: no rows"
+    parts = [plural(s.rows, "row")]
+    level = "note"
+    if s.overridden:
+        n = len(s.overridden_by)
+        if n > 3:
+            by = f"overridden by {n} later rules"
+        else:
+            lines = ", ".join(map(str, sorted(s.overridden_by)))
+            by = f"overridden by line{'s' if n > 1 else ''} {lines}"
+        if s.overridden == s.rows:
+            level = "warning"
+            parts.append(f"all {by}")
+        else:
+            parts.append(f"{s.overridden} {by}")
+    if s.last:
+        parts.append(f"last {s.last}")
+    return f"{level}: {', '.join(parts)}"
 
 
 def parser() -> argparse.ArgumentParser:
@@ -104,6 +183,32 @@ def parser() -> argparse.ArgumentParser:
     imp.add_argument(
         "-y", "--yes", action="store_true", help="skip the confirmation prompt"
     )
+    rls = sub.add_parser(
+        "rules",
+        help="show how often each rule matches",
+        description="Match every rule against CSV data and print one line per "
+        "rule: FILE:LINE: note|warning|error: text.",
+    )
+    rls.add_argument(
+        "csv", nargs="*", type=Path, help="CSV files (default: the source's CSV)"
+    )
+    rls.add_argument(
+        "--config",
+        default=argparse.SUPPRESS,
+        help="config file (default: nearest hledger-review.toml)",
+    )
+    rls.add_argument("-s", "--source", help="which [sources.NAME] to use")
+    rls.add_argument(
+        "-r",
+        "--rules",
+        type=Path,
+        help="rules file (default: the source's); picks the source that uses it",
+    )
+    rls.add_argument(
+        "--stdin",
+        action="store_true",
+        help="read the rules text from stdin, e.g. an unsaved editor buffer",
+    )
     return ap
 
 
@@ -111,7 +216,12 @@ def main(argv: list[str] | None = None) -> None:
     """Entry point."""
     args = parser().parse_args(argv)
     try:
-        config = load(getattr(args, "config", None), getattr(args, "file", None))
+        config_arg = getattr(args, "config", None)
+        if args.command == "rules":
+            sys.exit(
+                rule_stats(config_arg, args.source, args.rules, args.csv, args.stdin)
+            )
+        config = load(config_arg, getattr(args, "file", None))
         if args.command == "import":
             code = run_import(config, args.export, config.source(args.source), args.yes)
         else:

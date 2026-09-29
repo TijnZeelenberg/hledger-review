@@ -70,16 +70,21 @@ class Config:
 
     def source(self, name: str | None) -> Source:
         """The named source, or the only one when no name is given."""
-        if not self.sources:
-            raise ConfigError(f"no [sources.*] configured (looked for {CONFIG_NAME})")
-        if name is None:
-            if len(self.sources) > 1:
-                names = ", ".join(self.sources)
-                raise ConfigError(f"several sources configured, pick one: {names}")
-            return next(iter(self.sources.values()))
-        if name not in self.sources:
-            raise ConfigError(f"unknown source {name!r}")
-        return self.sources[name]
+        return pick_source(self.sources, name)
+
+
+def pick_source(sources: dict[str, Source], name: str | None) -> Source:
+    """The named source, or the only one when no name is given."""
+    if not sources:
+        raise ConfigError(f"no [sources.*] configured (looked for {CONFIG_NAME})")
+    if name is None:
+        if len(sources) > 1:
+            names = ", ".join(sources)
+            raise ConfigError(f"several sources configured, pick one: {names}")
+        return next(iter(sources.values()))
+    if name not in sources:
+        raise ConfigError(f"unknown source {name!r}")
+    return sources[name]
 
 
 # discovery
@@ -144,18 +149,36 @@ def _source(name: str, raw: object, base: Path) -> Source:
     )
 
 
+def _read(path: Path | None) -> dict[str, Any]:
+    if path is None:
+        return {}
+    try:
+        return tomllib.loads(path.read_text())
+    except tomllib.TOMLDecodeError as e:
+        raise ConfigError(f"{path}: {e}") from e
+
+
+def _sources(raw: dict[str, Any], base: Path) -> dict[str, Source]:
+    sources = raw.get("sources", {})
+    if not isinstance(sources, dict):
+        raise ConfigError("[sources] must be a table of tables")
+    return {n: _source(n, s, base) for n, s in sources.items()}
+
+
+def load_sources(config_arg: str | None = None) -> dict[str, Source]:
+    """Only the sources, for commands that do not need a journal."""
+    ledger_file = os.environ.get("LEDGER_FILE")
+    path = find_config(config_arg, Path(ledger_file) if ledger_file else None)
+    return _sources(_read(path), path.parent if path else Path.cwd())
+
+
 def load(config_arg: str | None = None, journal_arg: str | None = None) -> Config:
     """Build the config: CLI -f wins over $LEDGER_FILE, which wins over the file."""
     given = journal_arg or os.environ.get("LEDGER_FILE")
     cli_journal = Path(given).expanduser() if given else None
     path = find_config(config_arg, cli_journal)
 
-    raw: dict[str, Any] = {}
-    if path:
-        try:
-            raw = tomllib.loads(path.read_text())
-        except tomllib.TOMLDecodeError as e:
-            raise ConfigError(f"{path}: {e}") from e
+    raw = _read(path)
     base = path.parent if path else Path.cwd()
 
     journal = cli_journal or (
@@ -165,9 +188,6 @@ def load(config_arg: str | None = None, journal_arg: str | None = None) -> Confi
         raise ConfigError(
             f"no journal: pass -f, set $LEDGER_FILE or add `journal` to {CONFIG_NAME}"
         )
-    sources = raw.get("sources", {})
-    if not isinstance(sources, dict):
-        raise ConfigError("[sources] must be a table of tables")
     return Config(
         journal=journal,
         unmarked=_str(raw.get("unmarked", DEFAULT_UNMARKED), "unmarked"),
@@ -176,6 +196,6 @@ def load(config_arg: str | None = None, journal_arg: str | None = None) -> Confi
             if "accounts_file" in raw
             else None
         ),
-        sources={n: _source(n, s, base) for n, s in sources.items()},
+        sources=_sources(raw, base),
         path=path,
     )

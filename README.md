@@ -22,6 +22,7 @@ Needs hledger >= 1.42 on `PATH`. Once installed, `hledger review` works too
 ```sh
 hledger-review import ~/Downloads/export.csv   # dry run, confirm, append, check
 hledger-review                                  # review what is still unmarked
+hledger-review rules [CSV...]                   # how often each rule matches
 ```
 
 **import** copies the export to the source's stable CSV path, so hledger's
@@ -62,6 +63,44 @@ are commands, including on a text field. Press `i` on a field to type in it
 
 Use `--since YYYY-MM-DD` to limit the review. Use `--all` to also revisit
 transactions that are already categorised.
+
+**rules** matches every rule in the rules file against CSV data, the way
+hledger does, and prints one line per rule in the format compilers use:
+
+```
+imports/bank.csv.rules:42: note: 18 rows, last 2026-09-12
+imports/bank.csv.rules:57: warning: 3 rows, all overridden by line 88
+imports/bank.csv.rules:61: warning: no rows
+```
+
+"Overridden" means later matching rules reassign every field this rule sets.
+It reads the source's CSV by default, which holds only your latest export, so
+pass older exports too (`hledger-review rules exports/*.csv`) before you
+delete a rule for having no rows. Overlapping rows are counted once.
+`-r FILE` picks the source that uses that rules file, or, without a config,
+reads `FILE` minus `.rules`. In Neovim, `:cexpr system("hledger-review rules")`
+puts the lines in the quickfix list.
+
+## Neovim
+
+The repository is also a Neovim plugin that shows these stats at the end of
+every rule while you edit a `*.csv.rules` file, including unsaved changes.
+With lazy.nvim:
+
+```lua
+{ "TijnZeelenberg/hledger-review", event = "BufReadPre *.csv.rules", opts = {} }
+```
+
+`:HledgerReviewRules` refreshes and reports errors; `:HledgerReviewRules
+toggle` hides or shows the stats. Options, with their defaults:
+
+```lua
+opts = {
+  cmd = { "hledger-review", "rules" },
+  pattern = { "*.csv.rules" },
+  debounce = 300, -- ms
+}
+```
 
 ## Configure
 
