@@ -1,0 +1,38 @@
+; Sample journal: a mix of directives, comments and imported transactions.
+D €1,000.00
+
+include accounts.journal
+
+~ monthly  Budget
+    expenses:food:groceries          €300.00
+    assets:checking
+
+2026-01-01 Opening balances
+    assets:checking                 €1,000.00
+    equity:opening-balances
+
+2026-01-03 * (INV-1) Albert Heijn 1234  ; Omschrijving: boodschappen pas 12
+    expenses:unknown                   €23.99
+    assets:checking                   €-23.99 = €976.01
+
+2026-01-05 Spotify AB
+    expenses:unknown                   €11.99
+    assets:checking                   €-11.99 = €964.02
+
+2026-01-06 Albert Heijn 1234  ; Omschrijving: boodschappen
+    expenses:unknown		€5.00
+    assets:checking                    €-5.00 = €959.02
+    ; a posting-level comment
+
+2026-01-07 Salary
+    ; type: salary
+    income:work                     €-2,000.00
+    assets:checking                  €2,000.00 = €2,959.02
+
+2026-01-08 Refund from a friend
+    assets:checking                     €20.00 = €2,979.02
+    expenses:unknown
+
+2026-01-09=2026-01-10 ! Cash withdrawal
+    expenses:cash                      €50.00
+    assets:checking                   €-50.00 = €2,929.02

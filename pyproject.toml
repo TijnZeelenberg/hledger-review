@@ -1,0 +1,46 @@
+[project]
+name = "hledger-review"
+version = "0.1.0"
+description = "Import bank CSVs into an hledger journal and categorise what the rules missed, in a TUI"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Tijn Zeelenberg", email = "tijnqz@gmail.com" }
+]
+requires-python = ">=3.12"
+keywords = ["hledger", "plaintext-accounting", "tui", "csv", "textual"]
+classifiers = [
+    "Environment :: Console",
+    "Topic :: Office/Business :: Financial :: Accounting",
+]
+dependencies = [
+    "textual>=8",
+    "textual-autocomplete>=4",
+]
+
+[project.scripts]
+hledger-review = "hledger_review.cli:main"
+
+[dependency-groups]
+dev = [
+    "mypy>=1.18",
+    "pytest>=8",
+    "pytest-asyncio>=1",
+    "ruff>=0.13",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.15,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+strict = true
+files = ["src", "tests"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

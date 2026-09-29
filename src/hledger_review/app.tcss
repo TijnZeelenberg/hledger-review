@@ -1,0 +1,22 @@
+#list {
+    width: 48%;
+    border: round $primary;
+    border-title-color: $primary;
+}
+#detail {
+    border: round $accent;
+    border-title-color: $accent;
+    padding: 0 1;
+}
+#info { margin-bottom: 1; }
+.field { color: $text-muted; margin-top: 1; }
+#new-account { color: $warning; height: 1; }
+#rule-field { width: 100%; border: none; padding: 0; layout: horizontal; height: auto; }
+#rule-field RadioButton { width: auto; margin-right: 2; }
+#rule-error { color: $error; height: 1; }
+#same { margin-top: 1; }
+AutoComplete {
+    border: round $accent;
+    background: $panel;
+}
+AutoComplete .autocomplete--highlight-match { color: $accent; }

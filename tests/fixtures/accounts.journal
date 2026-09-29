@@ -1,0 +1,10 @@
+; account declarations
+account assets  ; type: A
+account expenses  ; type: X
+
+account assets:checking
+account equity:opening-balances
+account expenses:cash
+account expenses:food:groceries
+account expenses:unknown
+account income:work
