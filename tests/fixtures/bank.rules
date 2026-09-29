@@ -1,0 +1,25 @@
+# Shared rules for an anonymised, ING-like bank export
+separator     ;
+skip          1
+fields        date, payee, notes, direction, bedrag, saldo
+date-format   %Y%m%d
+decimal-mark  ,
+
+account1      expenses:unknown
+account2      assets:checking
+description   %payee
+comment       %notes
+balance2      €%saldo
+
+if %direction ^Debit$
+  amount1   €%bedrag
+  amount2  -€%bedrag
+
+if %direction ^Credit$
+  amount1  -€%bedrag
+  amount2   €%bedrag
+
+if %payee Employer BV
+  account1     income:work
+  description  Salary
+  comment

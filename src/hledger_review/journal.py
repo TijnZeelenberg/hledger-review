@@ -1,7 +1,6 @@
-"""A minimal, lossless journal model: parse, edit a few fields, render back.
+"""A minimal journal model: transaction blocks and the fields the review shows.
 
-Only transaction blocks are parsed; every other line is kept verbatim, so an
-unedited journal renders byte for byte identical.
+Only transaction blocks are parsed; every other line is kept verbatim.
 """
 
 import os
@@ -36,14 +35,17 @@ class Posting(NamedTuple):
         """Amount without balance assertion or comment, e.g. `€-23.99`."""
         return self.rest.split(";")[0].split("=")[0].strip()
 
+    @property
+    def assertion(self) -> str:
+        """The balance assertion's amount, e.g. `€976.01`, or an empty string."""
+        return self.rest.split(";")[0].partition("=")[2].lstrip("=*").strip()
+
 
 class Txn:
     """One transaction block: the date line plus its indented continuation lines."""
 
     def __init__(self, lines: list[str]) -> None:
         self.lines = lines
-        self.raw_name = self.description
-        self.notes = self.comment
 
     def _split_head(self) -> tuple[str, str, str]:
         line = self.lines[0]
@@ -65,13 +67,6 @@ class Txn:
     @property
     def comment(self) -> str:
         return self._split_head()[2].lstrip("; ").strip()
-
-    def set_description(self, desc: str, keep_comment: bool) -> None:
-        prefix, _, comment = self._split_head()
-        line = prefix + desc
-        if keep_comment and comment:
-            line += "  " + comment
-        self.lines[0] = line
 
     def postings(self) -> Iterator[Posting]:
         for i, line in enumerate(self.lines[1:], start=1):
@@ -109,17 +104,6 @@ class Txn:
             return p.amount
         return next((p.amount for p in self.postings() if p.amount), "")
 
-    def set_account(self, new_account: str, roles: Roles) -> None:
-        """Replace the target account, keeping the amount column where it was."""
-        p = self.target_posting(roles)
-        if p is None:
-            return
-        if not p.rest:
-            self.lines[p.line] = p.indent + new_account
-            return
-        pad = max(2, len(p.account) + len(p.sep) - len(new_account))
-        self.lines[p.line] = p.indent + new_account + " " * pad + p.rest
-
     def text(self) -> str:
         return "\n".join(self.lines)
 
@@ -140,8 +124,9 @@ def parse_journal(text: str) -> list[str | Txn]:
     return segments
 
 
-def render(segments: list[str | Txn]) -> str:
-    return "\n".join(s.text() if isinstance(s, Txn) else s for s in segments)
+def transactions(text: str) -> list[Txn]:
+    """Only the transactions of a journal, in order."""
+    return [s for s in parse_journal(text) if isinstance(s, Txn)]
 
 
 def write_atomic(path: Path, text: str) -> None:

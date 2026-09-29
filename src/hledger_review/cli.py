@@ -1,9 +1,10 @@
-"""Command line: `hledger-review [review|import|rules] ...`.
+"""Command line: `hledger-review [review|import|generate|rules] ...`.
 
 Installed on PATH, it also works as an hledger add-on: `hledger review`.
 """
 
 import argparse
+import datetime as dt
 import sys
 from pathlib import Path
 
@@ -18,8 +19,7 @@ from hledger_review.config import (
     load_sources,
     pick_source,
 )
-from hledger_review.importer import run_import
-from hledger_review.journal import Txn, parse_journal
+from hledger_review.importer import load_items, run_generate, run_import
 
 
 def review(config: Config, since: str | None, visit_all: bool) -> int:
@@ -28,29 +28,15 @@ def review(config: Config, since: str | None, visit_all: bool) -> int:
 
     if not config.journal.is_file():
         raise ConfigError(f"journal {config.journal} does not exist")
-    roles = config.roles
-    segments = parse_journal(config.journal.read_text())
-    txns = [s for s in segments if isinstance(s, Txn)]
-
-    def selected(t: Txn) -> bool:
-        if since and t.date < since:
-            return False
-        if roles.unmarked in t.accounts():
-            return True
-        return (
-            visit_all
-            and t.asset_posting(roles) is not None
-            and t.target_posting(roles) is not None
-        )
-
-    todo = [t for t in txns if selected(t)]
+    if not config.sources:
+        raise ConfigError("no [sources.*] configured: nothing to review")
     console = Console()
-    changed = ReviewApp(config, segments, todo).run() or 0
+    changed = ReviewApp(config, load_items(config, since, visit_all)).run() or 0
 
-    remaining = sum(1 for t in txns if roles.unmarked in t.accounts())
+    remaining = len(load_items(config, None, False))
     console.print(
         f"[bold]{changed}[/] transaction(s) updated, "
-        f"[yellow]{remaining}[/] still on {roles.unmarked}."
+        f"[yellow]{remaining}[/] still on {config.unmarked}."
     )
     if changed and hledger.executable():
         ok, msg = hledger.check(config.journal)
@@ -73,19 +59,20 @@ def rule_stats(
     source: Source | None
     if rules_arg is None:
         source = pick_source(sources, source_name)
-        if source.rules is None:
-            raise ConfigError(f"source {source.name!r} has no rules file")
         path = source.rules
     else:
         path = rules_arg
         wanted = rules_arg.resolve()
         source = next(
-            (s for s in sources.values() if s.rules and s.rules.resolve() == wanted),
+            (s for s in sources.values() if s.rules.resolve() == wanted),
             None,
         )
-    if not csvs:
-        default = source.csv if source and source.csv else path.with_suffix("")
-        csvs = [default]
+    if not csvs and source is None:
+        csvs = [path.with_suffix("")]
+    elif not csvs and source is not None:
+        csvs = [source.data(y) for y in source.years()]
+        if not csvs:
+            raise ConfigError(f"source {source.name!r} has no data files yet")
     missing = [str(c) for c in csvs if not c.is_file()]
     if missing:
         raise ConfigError(f"no such CSV file: {', '.join(missing)}")
@@ -95,8 +82,9 @@ def rule_stats(
     category = source.rule_account if source else None
     report = rules.stats(parsed, rules.read_rows(csvs, parsed.directives), category)
 
+    today = dt.date.today()
     for s in report.rules:
-        print(f"{path}:{s.rule.line}: {describe(s)}")
+        print(f"{path}:{s.rule.line}: {describe(s, report.rows, today)}")
     summary = f"{plural(report.rows, 'row')} from {plural(len(csvs), 'CSV file')}"
     if category:
         summary += f", {report.fallthrough} set no {category}"
@@ -108,29 +96,40 @@ def plural(n: int, noun: str) -> str:
     return f"{n} {noun}{'' if n == 1 else 's'}"
 
 
-def describe(s: rules.RuleStats) -> str:
+def age(date: dt.date, today: dt.date) -> str:
+    """How long ago DATE was, compactly: `today`, `5d ago`, `3mo ago`, `2y ago`."""
+    days = (today - date).days
+    if days <= 0:
+        return "today"
+    if days < 60:
+        return f"{days}d ago"
+    if days < 730:
+        return f"{days // 30}mo ago"
+    return f"{days // 365}y ago"
+
+
+def describe(s: rules.RuleStats, total: int, today: dt.date) -> str:
     """One rule's stats as `level: text`, the way compilers report."""
     if s.error:
         return f"error: {s.error}"
     if not s.rows:
-        return "warning: no rows"
-    parts = [plural(s.rows, "row")]
+        return "warning: unused"
+    parts = [f"{s.rows}/{total}"]
     level = "note"
     if s.overridden:
         n = len(s.overridden_by)
         if n > 3:
-            by = f"overridden by {n} later rules"
+            by = f"overridden ({n} rules)"
         else:
-            lines = ", ".join(map(str, sorted(s.overridden_by)))
-            by = f"overridden by line{'s' if n > 1 else ''} {lines}"
+            by = f"overridden by {', '.join(map(str, sorted(s.overridden_by)))}"
         if s.overridden == s.rows:
             level = "warning"
             parts.append(f"all {by}")
         else:
             parts.append(f"{s.overridden} {by}")
     if s.last:
-        parts.append(f"last {s.last}")
-    return f"{level}: {', '.join(parts)}"
+        parts.append(age(s.last, today))
+    return f"{level}: {' · '.join(parts)}"
 
 
 def parser() -> argparse.ArgumentParser:
@@ -174,7 +173,9 @@ def parser() -> argparse.ArgumentParser:
         help="categorise unmarked transactions in a TUI (default)",
     )
     imp = sub.add_parser(
-        "import", parents=[common], help="import a bank CSV export into the journal"
+        "import",
+        parents=[common],
+        help="merge a bank CSV export into the year files and regenerate",
     )
     imp.add_argument("export", type=Path, help="the CSV file downloaded from the bank")
     imp.add_argument(
@@ -183,14 +184,27 @@ def parser() -> argparse.ArgumentParser:
     imp.add_argument(
         "-y", "--yes", action="store_true", help="skip the confirmation prompt"
     )
+    gen = sub.add_parser(
+        "generate",
+        parents=[common],
+        help="regenerate the journals from the year files, then check",
+    )
+    gen.add_argument(
+        "year", nargs="*", type=int, help="years to generate (default: all)"
+    )
+    gen.add_argument("-s", "--source", help="only this [sources.NAME]")
     rls = sub.add_parser(
         "rules",
         help="show how often each rule matches",
         description="Match every rule against CSV data and print one line per "
-        "rule: FILE:LINE: note|warning|error: text.",
+        "rule: FILE:LINE: note|warning|error: text. `include` is not followed, "
+        "so run it on the shared rules; one-off tables are not counted.",
     )
     rls.add_argument(
-        "csv", nargs="*", type=Path, help="CSV files (default: the source's CSV)"
+        "csv",
+        nargs="*",
+        type=Path,
+        help="CSV files (default: all year files of the source)",
     )
     rls.add_argument(
         "--config",
@@ -224,6 +238,15 @@ def main(argv: list[str] | None = None) -> None:
         config = load(config_arg, getattr(args, "file", None))
         if args.command == "import":
             code = run_import(config, args.export, config.source(args.source), args.yes)
+        elif args.command == "generate":
+            sources = (
+                [config.source(args.source)]
+                if args.source
+                else list(config.sources.values())
+            )
+            if not sources:
+                raise ConfigError("no [sources.*] configured")
+            code = run_generate(config, sources, args.year)
         else:
             code = review(
                 config, getattr(args, "since", None), getattr(args, "all", False)

@@ -1,0 +1,9 @@
+; Entry point: the generated year journals plus what is typed by hand.
+commodity €1,000.00
+
+include accounts.journal
+include 2026/2026.journal
+
+2025-12-31 Opening balances
+    assets:checking                 €1,000.00
+    equity:opening-balances

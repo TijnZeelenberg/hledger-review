@@ -1,0 +1,6 @@
+# 2026 one-offs: single transactions the shared rules get wrong.
+
+include ../bank.rules
+
+if|account1|description|comment
+%date ^20260109$ && %saldo ^2909,02$ && %bedrag ^50,00$ && %direction ^Debit$|expenses:cash|Cash withdrawal|

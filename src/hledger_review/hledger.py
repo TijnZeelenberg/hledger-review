@@ -3,7 +3,10 @@
 import re
 import shutil
 import subprocess
+from collections.abc import Iterable
 from pathlib import Path
+
+from hledger_review.journal import write_atomic
 
 MIN_VERSION = (1, 42)
 
@@ -74,3 +77,39 @@ def append_rule(
         f.write(f"  {account_field:<12} {account}\n")
         f.write(f"  description  {description}\n")
         f.write("  comment\n")
+
+
+def one_off_matcher(key: Iterable[tuple[str, str]]) -> str:
+    """An exact match on every key field, e.g. `%date ^20260101$ && %saldo ^1,00$`."""
+    return " && ".join(f"%{name} ^{rules_pattern(value)}$" for name, value in key)
+
+
+def set_one_off(rules: Path, matcher: str, values: dict[str, str]) -> None:
+    """Add or replace MATCHER's line in the file's `if|...` table.
+
+    Without a table, one is appended with the columns of VALUES; an existing
+    table's columns must all be in VALUES.
+    """
+    text = rules.read_text() if rules.exists() else ""
+    lines = text.split("\n")
+    header = next((i for i, x in enumerate(lines) if x.startswith("if|")), None)
+    if header is None:
+        table = f"if|{'|'.join(values)}\n{matcher}|{'|'.join(values.values())}\n"
+        write_atomic(
+            rules, (text.rstrip("\n") + "\n\n" if text.strip() else "") + table
+        )
+        return
+    columns = [c.strip().lower() for c in lines[header][3:].split("|")]
+    unknown = [c for c in columns if c not in values]
+    if unknown:
+        raise ValueError(f"{rules}: cannot fill column {', '.join(unknown)}")
+    line = f"{matcher}|{'|'.join(values[c] for c in columns)}"
+    end = header + 1
+    while end < len(lines) and lines[end].strip():
+        if lines[end].split("|")[0] == matcher:
+            lines[end] = line
+            break
+        end += 1
+    else:
+        lines.insert(end, line)
+    write_atomic(rules, "\n".join(lines))

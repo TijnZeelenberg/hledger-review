@@ -2,12 +2,16 @@ import contextlib
 from pathlib import Path
 
 import pytest
-from textual.widgets import Checkbox, Input, RadioSet
+from textual.widgets import Checkbox, DataTable, Input, RadioSet
 
 from hledger_review.app import ReviewApp
 from hledger_review.config import Config, load
-from hledger_review.journal import Txn, parse_journal
+from hledger_review.importer import load_items, year_transactions
+from hledger_review.journal import Txn
 from hledger_review.widgets import ModalInput
+from tests.conftest import needs_hledger
+
+pytestmark = needs_hledger  # every save regenerates with hledger
 
 ACCOUNTS = [
     "assets:checking",
@@ -15,22 +19,37 @@ ACCOUNTS = [
     "expenses:subscriptions",
     "expenses:unknown",
 ]
+AH_03 = "%date ^20260103$ && %saldo ^976,01$ && %bedrag ^23,99$ && %direction ^Debit$"
+AH_06 = "%date ^20260106$ && %saldo ^959,02$ && %bedrag ^5,00$ && %direction ^Debit$"
+SPOTIFY = "%date ^20260105$ && %saldo ^964,02$ && %bedrag ^11,99$ && %direction ^Debit$"
 
 
 def make_app(config: Config) -> ReviewApp:
-    segments = parse_journal(config.journal.read_text())
-    todo = [
-        s for s in segments if isinstance(s, Txn) and config.unmarked in s.accounts()
-    ]
-    return ReviewApp(config, segments, todo, accounts=list(ACCOUNTS))
+    return ReviewApp(config, load_items(config, None, False), accounts=list(ACCOUNTS))
 
 
 def journal_txn(config: Config, date: str) -> Txn:
-    segments = parse_journal(config.journal.read_text())
-    return next(s for s in segments if isinstance(s, Txn) and s.date == date)
+    txns = year_transactions(config.source(None), 2026)
+    return next(t for t in txns if t.date == date)
 
 
-async def test_save_rewrites_in_place_and_applies_to_same_name(workdir: Path) -> None:
+def one_offs(workdir: Path) -> list[str]:
+    text = (workdir / "2026" / "one-offs.rules").read_text()
+    return text.split("if|account1|description|comment\n")[1].splitlines()
+
+
+def files(workdir: Path) -> dict[Path, bytes]:
+    return {p: p.read_bytes() for p in workdir.rglob("*") if p.is_file()}
+
+
+def pick_rule_field(app: ReviewApp) -> None:
+    radio = app.query_one("#rule-field", RadioSet)
+    radio.action_next_button()
+    radio.action_toggle_button()
+
+
+# saving
+async def test_save_writes_one_offs_for_the_same_name(workdir: Path) -> None:
     config = load()
     app = make_app(config)
     async with app.run_test() as pilot:
@@ -40,16 +59,37 @@ async def test_save_rewrites_in_place_and_applies_to_same_name(workdir: Path) ->
         await pilot.pause()
         await pilot.press("w")
         assert app.changed == 2
-        assert app.current is not None and app.current.date == "2026-01-05"
+        assert app.current is not None and app.current.txn.date == "2026-01-05"
+        table = app.query_one("#list", DataTable)
+        assert table.get_cell("bank:2026:2", "name") == "Groceries"
         await pilot.press("q")
 
+    assert one_offs(workdir)[1:] == [
+        f"{AH_03}|expenses:food:groceries|Groceries|",
+        f"{AH_06}|expenses:food:groceries|Groceries|",
+    ]
     for date in ("2026-01-03", "2026-01-06"):
         t = journal_txn(config, date)
-        assert t.description == "Groceries"
-        assert t.comment == ""
+        assert (t.description, t.comment) == ("Groceries", "")
         assert t.account(config.roles) == "expenses:food:groceries"
     assert journal_txn(config, "2026-01-03").lines[2].endswith("= €976.01")
     assert journal_txn(config, "2026-01-05").account(config.roles) == "expenses:unknown"
+
+
+async def test_same_description_keeps_the_comment(workdir: Path) -> None:
+    config = load()
+    app = make_app(config)
+    async with app.run_test() as pilot:
+        await pilot.press("n")  # on to Spotify AB
+        app.query_one("#account", Input).value = "expenses:subscriptions"
+        await pilot.pause()
+        await pilot.press("w")
+        assert app.changed == 1
+    assert one_offs(workdir)[1:] == [
+        f"{SPOTIFY}|expenses:subscriptions|Spotify AB|Subscription"
+    ]
+    t = journal_txn(config, "2026-01-05")
+    assert (t.description, t.comment) == ("Spotify AB", "Subscription")
 
 
 async def test_new_account_needs_confirmation_and_is_declared(workdir: Path) -> None:
@@ -66,45 +106,62 @@ async def test_new_account_needs_confirmation_and_is_declared(workdir: Path) -> 
     assert "account expenses:food:snacks" in (workdir / "accounts.journal").read_text()
 
 
-async def test_learned_rule_is_appended(workdir: Path) -> None:
+async def test_learned_rule_is_appended_and_applied(workdir: Path) -> None:
     config = load()
     app = make_app(config)
-    rules_before = (workdir / "bank.csv.rules").read_text()
+    rules_before = (workdir / "bank.rules").read_text()
+    one_offs_before = (workdir / "2026" / "one-offs.rules").read_text()
     async with app.run_test() as pilot:
         await pilot.press("n")  # skip Albert Heijn, on to Spotify AB
-        assert app.current is not None and app.current.raw_name == "Spotify AB"
+        assert app.current is not None
+        assert app.current.txn.description == "Spotify AB"
         app.query_one("#desc", Input).value = "Spotify"
         app.query_one("#account", Input).value = "expenses:subscriptions"
-        app.query_one("#rule-field", RadioSet).action_next_button()
-        app.query_one("#rule-field", RadioSet).action_toggle_button()
+        pick_rule_field(app)
         await pilot.pause()
         assert app.query_one("#pattern", Input).value == "Spotify AB"
         await pilot.press("w")
-    assert (workdir / "bank.csv.rules").read_text() == rules_before + (
+        assert app.changed == 1
+    assert (workdir / "bank.rules").read_text() == rules_before + (
         "\nif %payee Spotify AB\n"
-        "  account2     expenses:subscriptions\n"
+        "  account1     expenses:subscriptions\n"
         "  description  Spotify\n"
         "  comment\n"
     )
+    assert (workdir / "2026" / "one-offs.rules").read_text() == one_offs_before
+    t = journal_txn(config, "2026-01-05")
+    assert t.description == "Spotify"
+    assert t.account(config.roles) == "expenses:subscriptions"
 
 
-async def test_invalid_rule_pattern_blocks_save(workdir: Path) -> None:
+@pytest.mark.parametrize(
+    ("desc", "pattern", "error"),
+    [
+        ("Groceries", "(unclosed", "invalid regex"),
+        ("Groceries", "Jumbo", "does not match %payee"),
+        ("Groceries | AH", "Albert", "cannot go in a rules file"),
+    ],
+)
+async def test_bad_input_blocks_save(
+    workdir: Path, desc: str, pattern: str, error: str
+) -> None:
     config = load()
+    before = files(workdir)
     app = make_app(config)
     async with app.run_test() as pilot:
-        radio = app.query_one("#rule-field", RadioSet)
-        radio.action_next_button()
-        radio.action_toggle_button()
+        app.query_one("#desc", Input).value = desc
+        pick_rule_field(app)
         await pilot.pause()
-        app.query_one("#pattern", Input).value = "(unclosed"
+        app.query_one("#pattern", Input).value = pattern
         await pilot.press("w")
         assert app.changed == 0
+        assert error in str(app.query_one("#rule-error").render())
+    assert files(workdir) == before
 
 
 async def test_launches_with_nothing_to_review(workdir: Path) -> None:
     config = load()
-    segments = parse_journal(config.journal.read_text())
-    app = ReviewApp(config, segments, [], accounts=list(ACCOUNTS))
+    app = ReviewApp(config, [], accounts=list(ACCOUNTS))
     async with app.run_test() as pilot:
         assert app.query_one("#detail").border_title == "Nothing to review"
         assert not app.query_one("#desc", Input).display
@@ -114,19 +171,18 @@ async def test_launches_with_nothing_to_review(workdir: Path) -> None:
     assert app.return_value == 0
 
 
+# keys
 async def test_j_and_k_move_through_the_list(workdir: Path) -> None:
     config = load()
     app = make_app(config)
     async with app.run_test() as pilot:
         await pilot.press("j", "j")
-        assert app.current is not None and app.current.date == "2026-01-06"
+        assert app.current is not None and app.current.txn.date == "2026-01-06"
         await pilot.press("k")
-        assert app.current is not None and app.current.date == "2026-01-05"
+        assert app.current is not None and app.current.txn.date == "2026-01-05"
 
 
 async def test_keys_are_modal(workdir: Path) -> None:
-    from textual.widgets import DataTable
-
     config = load()
     app = make_app(config)
     async with app.run_test() as pilot:
@@ -149,9 +205,9 @@ async def test_keys_are_modal(workdir: Path) -> None:
         await pilot.press("h")
         assert isinstance(app.focused, DataTable)
         await pilot.press("G")
-        assert app.current is not None and app.current.date == "2026-01-08"
+        assert app.current is not None and app.current.txn.comment == "Paid back"
         await pilot.press("g")
-        assert app.current is not None and app.current.date == "2026-01-03"
+        assert app.current is not None and app.current.txn.date == "2026-01-03"
 
 
 async def test_leaving_a_field_ends_insert_mode(workdir: Path) -> None:
@@ -178,18 +234,30 @@ async def test_enter_saves_and_stays_in_the_form(workdir: Path) -> None:
         assert app.focused is desc and not desc.editing
 
 
-async def test_e_opens_the_rules_file(
+async def test_e_and_shift_e_edit_and_regenerate(
     workdir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls: list[list[str]] = []
+    rules = workdir / "bank.rules"
+
+    def editor(command: list[str]) -> None:
+        calls.append(command)
+        if command[-1] == str(rules):  # the user adds a rule
+            extra = "\nif %payee Spotify\n  account1  expenses:subscriptions\n"
+            rules.write_text(rules.read_text() + extra)
+
     monkeypatch.setenv("EDITOR", "nvim --clean")
     monkeypatch.delenv("VISUAL", raising=False)
-    monkeypatch.setattr("hledger_review.app.run_editor", calls.append)
+    monkeypatch.setattr("hledger_review.app.run_editor", editor)
     config = load()
     app = make_app(config)
     monkeypatch.setattr(app, "suspend", contextlib.nullcontext)  # headless test
     async with app.run_test() as pilot:
         await pilot.press("e")
-        await pilot.press("l", "e")  # a field in normal mode: still a command
-    rules = str(workdir / "bank.csv.rules")
-    assert calls == [["nvim", "--clean", rules], ["nvim", "--clean", rules]]
+        assert app.changed == 1  # Spotify, categorised by the new rule
+        assert app.status == {"bank:2026:1": "done"}
+        await pilot.press("l", "E")  # a field in normal mode: still a command
+    one_offs = str(workdir / "2026" / "one-offs.rules")
+    assert calls == [["nvim", "--clean", str(rules)], ["nvim", "--clean", one_offs]]
+    t = journal_txn(config, "2026-01-05")
+    assert t.account(config.roles) == "expenses:subscriptions"

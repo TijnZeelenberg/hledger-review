@@ -6,13 +6,19 @@ import pytest
 FIXTURES = Path(__file__).parent / "fixtures"
 
 CONFIG = """\
-journal = "sample.journal"
+journal = "main.journal"
 accounts_file = "accounts.journal"
 
 [sources.bank]
 account = "assets:checking"
-csv = "bank.csv"
+rules = "bank.rules"
+data = "{year}/{year}.csv"
+one_offs = "{year}/one-offs.rules"
+output = "{year}/{year}.journal"
+row_key = ["date", "saldo", "bedrag", "direction"]
+commodity_style = "€1,000.00"
 rule_fields = { payee = "description", notes = "comment" }
+rule_account = "account1"
 """
 
 
@@ -27,8 +33,7 @@ def isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
 @pytest.fixture
 def workdir(tmp_path: Path) -> Path:
     """A copy of the fixtures plus an hledger-review.toml, as the cwd."""
-    for f in FIXTURES.iterdir():
-        shutil.copy(f, tmp_path / f.name)
+    shutil.copytree(FIXTURES, tmp_path, dirs_exist_ok=True)
     (tmp_path / "hledger-review.toml").write_text(CONFIG)
     return tmp_path
 

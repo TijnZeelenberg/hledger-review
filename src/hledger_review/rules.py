@@ -1,4 +1,4 @@
-"""Per-rule statistics for an hledger CSV rules file, over CSV data.
+"""Read hledger CSV rules and data: per-rule statistics, field values per row.
 
 Matching follows hledger: case-insensitive POSIX extended regexes, matcher
 lines OR'ed, `&` and `&&` AND'ed, and a later rule overrides the fields an
@@ -12,6 +12,7 @@ import re
 import string
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 from functools import cached_property
 from pathlib import Path
 
@@ -20,6 +21,12 @@ IF_LINE = re.compile(r"^if(\s|$)")
 IF_TABLE = re.compile(r"^if[^\w\s]")
 ASSIGNMENT = re.compile(r"^\s+(\S+)")
 MATCHER = re.compile(r"^(!\s*)?(?:%(\S+)\s+)?(.*)$")
+# hledger fields a rules file can assign, e.g. `amount2-in` or `balance1`
+FIELD = re.compile(
+    r"^(date2?|status|code|description|comment\d*|account\d+|currency\d*"
+    r"|(amount|balance)\d*(-in|-out)?)$"
+)
+REFERENCE = re.compile(r"%(\w[\w-]*)")
 POSIX_CLASSES = {
     "[:alpha:]": "a-zA-Z",
     "[:digit:]": "0-9",
@@ -83,6 +90,7 @@ class Rule:
     line: int  # 1-based, the `if` line or the table line
     groups: list[list[Matcher]]
     assigns: frozenset[str]  # hledger field names, lowercased
+    values: tuple[tuple[str, str], ...] = ()  # (field, value template)
 
 
 @dataclass
@@ -94,6 +102,8 @@ class Directives:
     fields: list[str] = field(default_factory=list)
     encoding: str = "utf-8-sig"
     date_format: str | None = None
+    decimal_mark: str | None = None
+    assignments: dict[str, str] = field(default_factory=dict)  # top-level fields
 
 
 @dataclass
@@ -117,6 +127,10 @@ def _directive(d: Directives, line: str) -> None:
         d.encoding = value
     elif name == "date-format" and value:
         d.date_format = value
+    elif name == "decimal-mark" and value:
+        d.decimal_mark = value[:1]
+    elif FIELD.match(name.lower()):
+        d.assignments[name.lower()] = value
 
 
 def parse(text: str) -> RulesFile:
@@ -136,14 +150,19 @@ def parse(text: str) -> RulesFile:
             i += 1
             while i < len(lines) and lines[i].strip():
                 if not comment(lines[i]):
-                    matcher, *_ = lines[i].split(sep)
-                    rule = Rule(i + 1, parse_matchers([matcher]), frozenset(names))
+                    matcher, *cells = lines[i].split(sep)
+                    cell_values = tuple(
+                        (n, c.strip()) for n, c in zip(names, cells, strict=False)
+                    )
+                    rule = Rule(
+                        i + 1, parse_matchers([matcher]), frozenset(names), cell_values
+                    )
                     result.rules.append(rule)
                 i += 1
         elif IF_LINE.match(line):
             start = i
             matchers = [line[2:]]
-            assigns: set[str] = set()
+            values: list[tuple[str, str]] = []
             i += 1
             # matcher lines, then indented assignments; a blank line ends the block
             while i < len(lines) and lines[i].strip() and lines[i][0] not in " \t":
@@ -153,9 +172,15 @@ def parse(text: str) -> RulesFile:
             while i < len(lines) and lines[i].strip() and lines[i][0] in " \t":
                 m = ASSIGNMENT.match(lines[i])
                 if m and not comment(lines[i]):
-                    assigns.add(m.group(1).lower())
+                    rest = lines[i][m.end() :].strip()
+                    values.append((m.group(1).lower(), rest))
                 i += 1
-            rule = Rule(start + 1, parse_matchers(matchers), frozenset(assigns))
+            rule = Rule(
+                start + 1,
+                parse_matchers(matchers),
+                frozenset(n for n, _ in values),
+                tuple(values),
+            )
             result.rules.append(rule)
         else:
             if line and not line[0].isspace() and not comment(line):
@@ -230,6 +255,24 @@ class Evaluator:
             for group in rule.groups
         )
 
+    def assigned(self, rules: "RulesFile", row: Row) -> dict[str, str]:
+        """Every field the rules assign for ROW, as hledger would, interpolated."""
+        templates = dict(rules.directives.assignments)
+        for rule in rules.rules:
+            if rule.values and self.matches(rule, row):
+                templates.update(rule.values)
+        return {k: self.interpolate(v, row) for k, v in templates.items()}
+
+    def interpolate(self, template: str, row: Row) -> str:
+        """Replace `%name` and `%N` references with the row's values."""
+
+        def ref(m: re.Match[str]) -> str:
+            name = m.group(1)
+            known = name.isdigit() or name.lower() in self.index
+            return self.value(row, name) if known else m.group(0)
+
+        return REFERENCE.sub(ref, template)
+
     def date(self, row: Row) -> dt.date | None:
         """The row's `date` field, if there is one and it parses."""
         value = self.value(row, "date") if "date" in self.index else ""
@@ -239,6 +282,48 @@ class Evaluator:
             except ValueError:
                 continue
         return None
+
+
+# amounts
+def number(text: str, decimal_mark: str = ".") -> Decimal | None:
+    """The number in an hledger amount like `-€1.234,50`; None if there is none."""
+    body = text.split("@")[0]
+    digits = "".join(c for c in body if c.isdigit() or c == decimal_mark)
+    if not any(c.isdigit() for c in digits):
+        return None
+    sign = -1 if body.count("-") % 2 else 1
+    try:
+        return sign * Decimal(digits.replace(decimal_mark, "."))
+    except InvalidOperation:
+        return None
+
+
+def posting(values: dict[str, str], account: str) -> int | None:
+    """Which posting N the rules give ACCOUNT, from the `accountN` assignments."""
+    found = [int(k[7:]) for k, v in values.items() if k[7:].isdigit() and v == account]
+    return min(found) if found else None
+
+
+def posting_amount(values: dict[str, str], n: int, mark: str) -> Decimal | None:
+    """Posting N's amount from `amountN`, `amountN-in/-out` or `amount`."""
+    for suffix in (str(n), "") if n in (1, 2) else (str(n),):
+        sign = -1 if not suffix and n == 2 else 1
+        if f"amount{suffix}" in values:
+            amount = number(values[f"amount{suffix}"], mark)
+            return None if amount is None else sign * amount
+        amount_in = number(values.get(f"amount{suffix}-in", ""), mark)
+        amount_out = number(values.get(f"amount{suffix}-out", ""), mark)
+        if amount_in:
+            return sign * amount_in
+        if amount_out:
+            return -sign * amount_out
+    return None
+
+
+def posting_balance(values: dict[str, str], n: int, mark: str) -> Decimal | None:
+    """Posting N's balance assertion, from `balanceN` (or `balance` for 1)."""
+    text = values.get(f"balance{n}", values.get("balance", "") if n == 1 else "")
+    return number(text, mark)
 
 
 # statistics

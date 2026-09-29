@@ -1,0 +1,33 @@
+; GENERATED, do not edit: bank 2026 from 2026.csv and one-offs.rules
+;   hledger -f 2026/2026.csv --rules 2026/one-offs.rules print -c €1,000.00
+
+decimal-mark .
+
+2026-01-03 Albert Heijn 1234  ; Omschrijving: boodschappen pas 12
+    expenses:unknown          €23.99
+    assets:checking          €-23.99 = €976.01
+
+2026-01-05 Spotify AB  ; Subscription
+    expenses:unknown          €11.99
+    assets:checking          €-11.99 = €964.02
+
+2026-01-06 Albert Heijn 1234  ; Omschrijving: boodschappen
+    expenses:unknown           €5.00
+    assets:checking           €-5.00 = €959.02
+
+2026-01-07 Salary
+    income:work          €-2,000.00
+    assets:checking       €2,000.00 = €2,959.02
+
+2026-01-08 A Friend  ; Refund
+    expenses:unknown         €-20.00
+    assets:checking           €20.00 = €2,979.02
+
+2026-01-08 A Friend  ; Paid back
+    expenses:unknown          €20.00
+    assets:checking          €-20.00 = €2,959.02
+
+2026-01-09 Cash withdrawal
+    expenses:cash            €50.00
+    assets:checking         €-50.00 = €2,909.02
+

@@ -1,17 +1,23 @@
 import datetime as dt
 import io
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
-from hledger_review.cli import main
+from hledger_review.cli import age, describe, main
 from hledger_review.rules import (
     Evaluator,
     Row,
     Rule,
+    RuleStats,
     compile_pattern,
+    number,
     parse,
     parse_matchers,
+    posting,
+    posting_amount,
+    posting_balance,
     read_rows,
     stats,
 )
@@ -119,6 +125,47 @@ def test_read_rows_skips_header_and_overlap(tmp_path: Path) -> None:
     ]
 
 
+# field values
+def test_assigned_follows_later_rules_and_interpolates() -> None:
+    rules = parse(RULES + "\nif %payee ^AH\n  amount1  -%amount EUR\n")
+    values = Evaluator(rules.directives).assigned(rules, AH)
+    assert values["account1"] == "expenses:food"
+    assert values["description"] == "Groceries"
+    assert values["amount1"] == "--3.00 EUR"
+
+
+def test_table_values() -> None:
+    shell = parse(RULES).rules[3]
+    assert shell.values == (("account1", "expenses:car"), ("description", "Fuel"))
+
+
+@pytest.mark.parametrize(
+    ("text", "mark", "expected"),
+    [
+        ("€-1,234.50", ".", Decimal("-1234.50")),
+        ("-€1.234,50", ",", Decimal("-1234.50")),
+        ("--€3,00", ",", Decimal("3.00")),
+        ("€5 @ $6", ".", Decimal(5)),
+        ("€", ".", None),
+    ],
+)
+def test_number(text: str, mark: str, expected: Decimal | None) -> None:
+    assert number(text, mark) == expected
+
+
+def test_posting_amounts_and_balances() -> None:
+    values = {"account1": "x", "account2": "bank", "amount": "5", "balance": "9"}
+    assert posting(values, "bank") == 2
+    assert posting(values, "nope") is None
+    assert posting_amount(values, 1, ".") == 5
+    assert posting_amount(values, 2, ".") == -5
+    assert posting_balance(values, 1, ".") == 9
+    assert posting_balance(values, 2, ".") is None
+    in_out = {"amount2-in": "", "amount2-out": "7", "balance2": "1,5"}
+    assert posting_amount(in_out, 2, ",") == -7
+    assert posting_balance(in_out, 2, ",") == Decimal("1.5")
+
+
 # statistics
 def test_stats() -> None:
     text = RULES + "\nif %payee strijp\n  account1  expenses:food:groceries\n"
@@ -145,35 +192,74 @@ def test_stats_bad_regex() -> None:
     assert s.error is not None and s.rows == 0
 
 
+def test_age() -> None:
+    today = dt.date(2026, 9, 29)
+    ages = [age(today - dt.timedelta(days=d), today) for d in (0, 1, 59, 60, 730)]
+    assert ages == ["today", "1d ago", "59d ago", "2mo ago", "2y ago"]
+    assert age(today + dt.timedelta(days=1), today) == "today"
+
+
+def test_describe() -> None:
+    today = dt.date(2026, 9, 29)
+    rule = Rule(1, [], frozenset({"account1"}))
+    last = dt.date(2026, 9, 27)
+
+    def text(**kw: object) -> str:
+        return describe(RuleStats(rule, **kw), 102, today)  # type: ignore[arg-type]
+
+    assert text(rows=69, last=last) == "note: 69/102 · 2d ago"
+    assert text() == "warning: unused"
+    assert text(error="bad") == "error: bad"
+    assert (
+        text(rows=5, overridden=2, overridden_by={92, 88})
+        == "note: 5/102 · 2 overridden by 88, 92"
+    )
+    assert (
+        text(rows=5, overridden=5, overridden_by={1, 2, 3, 4}, last=last)
+        == "warning: 5/102 · all overridden (4 rules) · 2d ago"
+    )
+
+
 # command line
 def test_cli_prints_one_line_per_rule(
     workdir: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    rules = workdir / "bank.csv.rules"
-    rules.write_text(rules.read_text() + "\nif %payee Nothing\n  account2  x\n")
+    rules = workdir / "bank.rules"
+    rules.write_text(rules.read_text() + "\nif %payee Nothing\n  account1  x\n")
+    (workdir / "2025").mkdir()
+    (workdir / "2025" / "2025.csv").write_text("h\n20251230;Bakery;x;Debit;3,00;1\n")
     with pytest.raises(SystemExit) as exit:
         main(["rules"])
     assert exit.value.code == 0
     out, err = capsys.readouterr()
+
+    def ago(day: int) -> str:
+        return age(dt.date(2026, 1, day), dt.date.today())
+
     assert out.splitlines() == [
-        f"{rules}:11: note: 1 row, last 2026-01-12",
-        f"{rules}:16: warning: no rows",
+        f"{rules}:14: note: 6/8 · {ago(9)}",
+        f"{rules}:18: note: 2/8 · {ago(8)}",
+        f"{rules}:22: note: 1/8 · {ago(7)}",
+        f"{rules}:27: warning: unused",
     ]
-    assert err == "3 rows from 1 CSV file, 2 set no account2\n"
+    assert err == "8 rows from 2 CSV files, 7 set no account1\n"
 
 
 def test_cli_rules_file_from_stdin_and_explicit_csv(
     workdir: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     other = workdir / "other.csv"
-    other.write_text("h\n2026-02-01,Employer BV,x,1.00,1.00\n")
-    unsaved = (workdir / "bank.csv.rules").read_text().replace("Employer", "Nobody")
+    other.write_text("h\n20260201;Employer BV;x;Credit;1,00;1,00\n")
+    unsaved = (workdir / "bank.rules").read_text().replace("Employer", "Nobody")
     monkeypatch.setattr("sys.stdin", io.StringIO(unsaved))
     with pytest.raises(SystemExit):
-        main(["rules", "--rules", "bank.csv.rules", "--stdin", str(other)])
+        main(["rules", "--rules", "bank.rules", "--stdin", str(other)])
     out, err = capsys.readouterr()
-    assert out == "bank.csv.rules:11: warning: no rows\n"
-    assert err.startswith("1 row from 1 CSV file")
+    assert out.splitlines()[1:] == [
+        f"bank.rules:18: note: 1/1 · {age(dt.date(2026, 2, 1), dt.date.today())}",
+        "bank.rules:22: warning: unused",
+    ]
+    assert err == "1 row from 1 CSV file, 1 set no account1\n"
 
 
 def test_cli_rules_without_config(
@@ -184,7 +270,7 @@ def test_cli_rules_without_config(
     with pytest.raises(SystemExit):
         main(["rules", "-r", "x.csv.rules"])
     out, err = capsys.readouterr()
-    assert out == "x.csv.rules:2: note: 1 row\n"
+    assert out == "x.csv.rules:2: note: 1/1\n"
     assert err == "1 row from 1 CSV file\n"
 
 
