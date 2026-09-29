@@ -34,7 +34,7 @@ from textual_autocomplete import DropdownItem
 from hledger_review import completion, hledger, rules, theme
 from hledger_review.completion import Candidates, Complete, TagComplete
 from hledger_review.config import Config, ConfigError, Source
-from hledger_review.history import History
+from hledger_review.history import History, short_account
 from hledger_review.importer import (
     Failed,
     Item,
@@ -178,8 +178,6 @@ class ReviewApp(App[int]):
         history = self.query_one("#history", DataTable)
         history.can_focus = False
         history.display = False
-        for label in ("#", "Date", "Amount", "Account", "Description", "Tags"):
-            history.add_column(label)
         table = self.query_one("#list", DataTable)
         table.add_column(" ", key="status", width=1)
         table.add_column("Date", key="date")
@@ -272,13 +270,14 @@ class ReviewApp(App[int]):
         found = found[:5]
         self.shown = [b.key for b in found]
         table = self.query_one("#history", DataTable)
-        table.clear()
+        table.clear(columns=True)  # else columns keep the widest width ever shown
+        table.add_columns("#", "Date", "Amount", "Account", "Description", "Tags")
         for n, b in enumerate(found, start=1):
             table.add_row(
                 Text(str(n), style="dim"),
                 b.date,
                 amount_text(b.amount),
-                b.account,
+                short_account(b.account),
                 b.description,
                 b.tags,
             )

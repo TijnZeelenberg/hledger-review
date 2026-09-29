@@ -62,6 +62,12 @@ def format_tags(tags: Iterable[tuple[str, str]]) -> str:
     return ", ".join(f"{n}:{v}" if v else n for n, v in dict.fromkeys(tags))
 
 
+def short_account(account: str) -> str:
+    """Parents to their first letter, to fit a narrow table: `e:f:groceries`."""
+    *parents, leaf = account.split(":")
+    return ":".join([p[:1] for p in parents] + [leaf])
+
+
 def normal(payee: str) -> str:
     """A bank name to compare: whitespace collapsed, case folded."""
     return " ".join(payee.split()).casefold()

@@ -67,7 +67,8 @@ AutoComplete .autocomplete--highlight-match { color: $accent; text-style: bold; 
 /* history and suggestion */
 #history {
     height: auto;
-    max-height: 9;
+    max-height: 8;
+    overflow-x: hidden;
     border: round $border-blurred;
     border-title-color: $text-muted;
     background: $background;

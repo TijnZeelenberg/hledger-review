@@ -366,7 +366,7 @@ async def test_history_and_suggestion_never_save(history_workdir: Path) -> None:
         assert str(row[0]) == "1" and str(row[2]) == "€-8.00"
         assert row[1:2] + row[3:] == [
             "2025-06-01",
-            "expenses:food:groceries",
+            "e:f:groceries",
             "Groceries",
             "reis:gent",
         ]

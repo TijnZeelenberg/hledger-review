@@ -6,6 +6,7 @@ from hledger_review.history import (
     History,
     comment_tags,
     format_tags,
+    short_account,
     suggest,
 )
 from hledger_review.importer import Shared, locate, locate_all, year_transactions
@@ -103,3 +104,8 @@ def test_suggest_breaks_ties_by_date() -> None:
     assert suggest([]) is None
     one = suggest([make("2025-01-01", "Tea"), make("2025-01-02", "Tea")])
     assert one is not None and one.hint == "suggested from 2 earlier"
+
+
+def test_short_account() -> None:
+    assert short_account("expenses:food:groceries") == "e:f:groceries"
+    assert short_account("expenses") == "expenses"
