@@ -271,15 +271,19 @@ class ReviewApp(App[int]):
         self.shown = [b.key for b in found]
         table = self.query_one("#history", DataTable)
         table.clear(columns=True)  # else columns keep the widest width ever shown
-        table.add_columns("#", "Date", "Amount", "Account", "Description", "Tags")
+        table.add_columns("#", "Date", "Amount", "Account")
+        # at most 20 wide, to leave room for the tags
+        longest = max((len(b.description) for b in found), default=0)
+        table.add_column("Description", width=max(11, min(longest, 20)))
+        table.add_column("Tags")
         for n, b in enumerate(found, start=1):
             table.add_row(
                 Text(str(n), style="dim"),
                 b.date,
                 amount_text(b.amount),
-                short_account(b.account),
-                b.description,
-                b.tags,
+                Text(short_account(b.account)),  # Text: `:a:` is no emoji code
+                Text(b.description, no_wrap=True, overflow="ellipsis"),
+                Text(b.tags),
             )
         table.display = bool(found)
         what = "Same name" if by_payee else "Same amount ±€0.01"

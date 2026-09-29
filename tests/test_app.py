@@ -362,10 +362,10 @@ async def test_history_and_suggestion_never_save(history_workdir: Path) -> None:
         history = app.query_one("#history", DataTable)
         assert history.row_count == 4 and history.display
         assert str(history.border_title).startswith("Same name")
-        row = history.get_row_at(0)
-        assert str(row[0]) == "1" and str(row[2]) == "€-8.00"
-        assert row[1:2] + row[3:] == [
+        assert [str(c) for c in history.get_row_at(0)] == [
+            "1",
             "2025-06-01",
+            "€-8.00",
             "e:f:groceries",
             "Groceries",
             "reis:gent",
@@ -422,7 +422,7 @@ async def test_history_follows_a_save(history_workdir: Path) -> None:
         assert app.current is not None and app.current.txn.date == "2026-01-06"
         history = app.query_one("#history", DataTable)
         assert history.get_row_at(0)[1] == "2026-01-03"
-        assert history.get_row_at(0)[4] == "Weekly shop"
+        assert str(history.get_row_at(0)[4]) == "Weekly shop"
         assert hint(app) == "suggested from 2 of 5 earlier"
     t = journal_txn(config, "2026-01-03")
     assert (t.description, t.account(config.roles)) == (

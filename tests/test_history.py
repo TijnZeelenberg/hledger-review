@@ -109,3 +109,8 @@ def test_suggest_breaks_ties_by_date() -> None:
 def test_short_account() -> None:
     assert short_account("expenses:food:groceries") == "e:f:groceries"
     assert short_account("expenses") == "expenses"
+
+
+def test_history_survives_a_missing_rules_file(history_workdir: Path) -> None:
+    (history_workdir / "bank.rules").rename(history_workdir / "moved.rules")
+    assert History(load()).earlier("bank:2026:0") == ([], False)

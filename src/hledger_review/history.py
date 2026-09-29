@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from hledger_review import rules
-from hledger_review.config import Config, Source
+from hledger_review.config import Config, ConfigError, Source
 from hledger_review.importer import Shared, locate_all, year_transactions
 from hledger_review.journal import Roles, Txn
 
@@ -118,7 +118,10 @@ class History:
 
     def refresh(self, source: Source, year: int) -> None:
         """Re-read one regenerated year."""
-        self.years[source.name, year] = bookings(self.config, source, year)
+        try:
+            self.years[source.name, year] = bookings(self.config, source, year)
+        except (ConfigError, re.error):  # the review works without history
+            self.years[source.name, year] = []
         self.by_key = {b.key: b for bs in self.years.values() for b in bs}
 
     def earlier(self, key: str) -> tuple[list[Booking], bool]:
