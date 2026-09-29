@@ -122,14 +122,18 @@ transactions that are already categorised.
 hledger does, and prints one line per rule in the format compilers use:
 
 ```
-bank.rules:42: note: 18/240 · 17d ago
-bank.rules:57: warning: 3/240 · all overridden by 88 · 2mo ago
+bank.rules:42: note: 18 matches · 2w
+bank.rules:57: warning: 3 matches · all overridden by 88 · 2m
 bank.rules:61: warning: unused
+bank.rules:66: warning: 4 matches · 14m · stale
+bank.rules:70: warning: 1 match · 3m
 ```
 
-`18/240` is the rows the rule matches out of all rows, followed by how long
-ago the latest one was. "Overridden" means later matching rules reassign
-every field this rule sets.
+The count is the rows the rule matches, followed by how long ago the latest
+one was (`d`ays, `w`eeks, `m`onths, `y`ears). "Overridden" means later
+matching rules reassign every field this rule sets. "Stale" means no match
+in over a year. A single match is a warning too, since that rule may belong
+in a one-offs table instead.
 By default it reads the source's shared rules and all of its year CSVs.
 `include` is not followed, so the one-offs tables are not counted: a rule
 that only one-offs override still shows as matching, and the "set no

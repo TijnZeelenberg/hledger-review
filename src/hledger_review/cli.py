@@ -21,6 +21,8 @@ from hledger_review.config import (
 )
 from hledger_review.importer import load_items, run_generate, run_import
 
+STALE_DAYS = 365  # no match for longer is flagged; yearly bills still pass
+
 
 def review(config: Config, since: str | None, visit_all: bool) -> int:
     """Open the TUI over unmarked transactions, then run `hledger check`."""
@@ -84,7 +86,7 @@ def rule_stats(
 
     today = dt.date.today()
     for s in report.rules:
-        print(f"{path}:{s.rule.line}: {describe(s, report.rows, today)}")
+        print(f"{path}:{s.rule.line}: {describe(s, today)}")
     summary = f"{plural(report.rows, 'row')} from {plural(len(csvs), 'CSV file')}"
     if category:
         summary += f", {report.fallthrough} set no {category}"
@@ -97,24 +99,26 @@ def plural(n: int, noun: str) -> str:
 
 
 def age(date: dt.date, today: dt.date) -> str:
-    """How long ago DATE was, compactly: `today`, `5d ago`, `3mo ago`, `2y ago`."""
+    """How long ago DATE was, compactly: `today`, `5d`, `3w`, `4m`, `2y`."""
     days = (today - date).days
     if days <= 0:
         return "today"
+    if days < 14:
+        return f"{days}d"
     if days < 60:
-        return f"{days}d ago"
+        return f"{days // 7}w"
     if days < 730:
-        return f"{days // 30}mo ago"
-    return f"{days // 365}y ago"
+        return f"{days // 30}m"
+    return f"{days // 365}y"
 
 
-def describe(s: rules.RuleStats, total: int, today: dt.date) -> str:
+def describe(s: rules.RuleStats, today: dt.date) -> str:
     """One rule's stats as `level: text`, the way compilers report."""
     if s.error:
         return f"error: {s.error}"
     if not s.rows:
         return "warning: unused"
-    parts = [f"{s.rows}/{total}"]
+    parts = [f"{s.rows} {'match' if s.rows == 1 else 'matches'}"]
     level = "note"
     if s.overridden:
         n = len(s.overridden_by)
@@ -129,6 +133,11 @@ def describe(s: rules.RuleStats, total: int, today: dt.date) -> str:
             parts.append(f"{s.overridden} {by}")
     if s.last:
         parts.append(age(s.last, today))
+        if (today - s.last).days > STALE_DAYS:
+            level = "warning"
+            parts.append("stale")
+    if s.rows == 1:
+        level = "warning"
     return f"{level}: {' · '.join(parts)}"
 
 

@@ -194,8 +194,9 @@ def test_stats_bad_regex() -> None:
 
 def test_age() -> None:
     today = dt.date(2026, 9, 29)
-    ages = [age(today - dt.timedelta(days=d), today) for d in (0, 1, 59, 60, 730)]
-    assert ages == ["today", "1d ago", "59d ago", "2mo ago", "2y ago"]
+    days = (0, 1, 13, 14, 59, 60, 729, 730)
+    ages = [age(today - dt.timedelta(days=d), today) for d in days]
+    assert ages == ["today", "1d", "13d", "2w", "8w", "2m", "24m", "2y"]
     assert age(today + dt.timedelta(days=1), today) == "today"
 
 
@@ -205,19 +206,22 @@ def test_describe() -> None:
     last = dt.date(2026, 9, 27)
 
     def text(**kw: object) -> str:
-        return describe(RuleStats(rule, **kw), 102, today)  # type: ignore[arg-type]
+        return describe(RuleStats(rule, **kw), today)  # type: ignore[arg-type]
 
-    assert text(rows=69, last=last) == "note: 69/102 · 2d ago"
+    assert text(rows=69, last=last) == "note: 69 matches · 2d"
     assert text() == "warning: unused"
     assert text(error="bad") == "error: bad"
     assert (
         text(rows=5, overridden=2, overridden_by={92, 88})
-        == "note: 5/102 · 2 overridden by 88, 92"
+        == "note: 5 matches · 2 overridden by 88, 92"
     )
     assert (
         text(rows=5, overridden=5, overridden_by={1, 2, 3, 4}, last=last)
-        == "warning: 5/102 · all overridden (4 rules) · 2d ago"
+        == "warning: 5 matches · all overridden (4 rules) · 2d"
     )
+    assert text(rows=4, last=dt.date(2025, 9, 29)) == "note: 4 matches · 12m"
+    assert text(rows=4, last=dt.date(2025, 9, 28)) == "warning: 4 matches · 12m · stale"
+    assert text(rows=1, last=last) == "warning: 1 match · 2d"
 
 
 # command line
@@ -237,9 +241,9 @@ def test_cli_prints_one_line_per_rule(
         return age(dt.date(2026, 1, day), dt.date.today())
 
     assert out.splitlines() == [
-        f"{rules}:14: note: 6/8 · {ago(9)}",
-        f"{rules}:18: note: 2/8 · {ago(8)}",
-        f"{rules}:22: note: 1/8 · {ago(7)}",
+        f"{rules}:14: note: 6 matches · {ago(9)}",
+        f"{rules}:18: note: 2 matches · {ago(8)}",
+        f"{rules}:22: warning: 1 match · {ago(7)}",
         f"{rules}:27: warning: unused",
     ]
     assert err == "8 rows from 2 CSV files, 7 set no account1\n"
@@ -255,8 +259,9 @@ def test_cli_rules_file_from_stdin_and_explicit_csv(
     with pytest.raises(SystemExit):
         main(["rules", "--rules", "bank.rules", "--stdin", str(other)])
     out, err = capsys.readouterr()
+    ago = age(dt.date(2026, 2, 1), dt.date.today())
     assert out.splitlines()[1:] == [
-        f"bank.rules:18: note: 1/1 · {age(dt.date(2026, 2, 1), dt.date.today())}",
+        f"bank.rules:18: warning: 1 match · {ago}",
         "bank.rules:22: warning: unused",
     ]
     assert err == "1 row from 1 CSV file, 1 set no account1\n"
@@ -270,7 +275,7 @@ def test_cli_rules_without_config(
     with pytest.raises(SystemExit):
         main(["rules", "-r", "x.csv.rules"])
     out, err = capsys.readouterr()
-    assert out == "x.csv.rules:2: note: 1/1\n"
+    assert out == "x.csv.rules:2: warning: 1 match\n"
     assert err == "1 row from 1 CSV file\n"
 
 
