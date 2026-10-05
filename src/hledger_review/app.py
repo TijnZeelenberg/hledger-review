@@ -19,7 +19,6 @@ from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical
 from textual.widget import Widget
 from textual.widgets import (
-    Checkbox,
     DataTable,
     Footer,
     Header,
@@ -27,8 +26,10 @@ from textual.widgets import (
     Label,
     RadioButton,
     RadioSet,
+    SelectionList,
     Static,
 )
+from textual.widgets.selection_list import Selection
 from textual_autocomplete import DropdownItem
 
 from hledger_review import completion, hledger, rules, theme
@@ -45,7 +46,7 @@ from hledger_review.importer import (
     year_transactions,
 )
 from hledger_review.journal import declare_account
-from hledger_review.widgets import ListTable, ModalInput, ModeChanged
+from hledger_review.widgets import FormInput, FormRadioSet, FormSelectionList, ListTable
 
 
 def run_editor(command: list[str]) -> None:
@@ -76,15 +77,12 @@ class ReviewApp(App[int]):
     TITLE = "hledger-review"
     CSS_PATH = "app.tcss"
     BINDINGS: ClassVar[list[BindingType]] = [
-        # vim-like and modal: fields only take text in insert mode (i on the
-        # field, Esc to leave), so letters are commands everywhere else
-        Binding("i", "insert", "Insert"),
-        Binding("escape", "normal", "Normal", show=False),
-        Binding("h", "to_list", "List", show=False),
+        # vim-like on the list; the form is a plain form (Tab between fields,
+        # fields take text right away), so its letters are never commands
+        Binding("escape", "escape", "List", show=False),
         Binding("l", "to_form", "Form", show=False),
-        Binding("j", "field(1)", "Next field", show=False),
-        Binding("k", "field(-1)", "Previous field", show=False),
         Binding("w", "save", "Write"),
+        Binding("ctrl+s", "save", "Write", show=False),
         # n/N find the next/previous match while a search is shown, else n skips
         Binding("n", "search_next(1)", "Next match"),
         Binding("N", "search_next(-1)", "Previous match", show=False),
@@ -144,29 +142,29 @@ class ReviewApp(App[int]):
                 yield Label("", id="suggestion", classes="note")
                 with Horizontal(classes="row"):
                     yield Label("Description", classes="field")
-                    yield ModalInput(id="desc")
+                    yield FormInput(id="desc")
                 with Horizontal(classes="row"):
                     yield Label("Account", classes="field")
-                    yield ModalInput(id="account")
+                    yield FormInput(id="account")
                 yield Label("", id="new-account", classes="note")
                 with Horizontal(classes="row"):
                     yield Label("Tags", classes="field")
-                    yield ModalInput(id="tags", placeholder="e.g. reis:gent, vast")
+                    yield FormInput(id="tags", placeholder="e.g. reis:gent, vast")
                 with Horizontal(classes="row", id="same-row"):
                     yield Label("Same name", classes="field")
-                    yield Checkbox("", id="same")
+                    yield FormSelectionList(id="same")
                 with Horizontal(classes="row", id="rule-row"):
                     yield Label("Shared rule", classes="field")
-                    with RadioSet(id="rule-field"):
+                    with FormRadioSet(id="rule-field"):
                         yield RadioButton("none", value=True)
                         for f in self.rule_fields[1:]:
                             yield RadioButton(f"%{f}")
                 with Horizontal(classes="row", id="pattern-row"):
                     yield Label("Pattern", classes="field")
-                    yield ModalInput(id="pattern", placeholder="regex", disabled=True)
+                    yield FormInput(id="pattern", placeholder="regex", disabled=True)
                 yield Label("", id="rule-error", classes="note")
         with Horizontal(id="statusbar"):
-            yield Static("NORMAL", id="mode")
+            yield Static("LIST", id="mode")
             with Horizontal(id="search-bar"):
                 yield Label("/", id="slash")
                 yield Input(id="search")
@@ -190,7 +188,7 @@ class ReviewApp(App[int]):
         self.apply_theme()
         self.sub_title = self.config.journal.name
         self.mount(
-            completion.ModalAutoComplete(
+            completion.TypedAutoComplete(
                 "#account",
                 candidates=lambda _: [DropdownItem(a) for a in self.accounts],
             ),
@@ -214,6 +212,7 @@ class ReviewApp(App[int]):
                 key=item.key,
             )
         self.update_title()
+        self.watch(self.screen, "focused", self.show_mode)
         table.focus()
         if self.todo:
             self.load(self.todo[0])
@@ -253,6 +252,14 @@ class ReviewApp(App[int]):
             and o.key not in self.status
         ]
 
+    def same_list(self) -> SelectionList[str]:
+        return self.query_one("#same", SelectionList)
+
+    def update_same_title(self) -> None:
+        checklist = self.same_list()
+        count = checklist.option_count
+        checklist.border_title = f"Also apply to {len(checklist.selected)}/{count}"
+
     def load(self, item: Item) -> None:
         self.current = item
         t = item.txn
@@ -275,10 +282,24 @@ class ReviewApp(App[int]):
         account.value = ""
         account.placeholder = t.account(self.roles)
         self.query_one("#tags", Input).value = ""
+        self.untype()
         same = self.same_name(item)
-        checkbox = self.query_one("#same", Checkbox)
-        checkbox.label = f"Apply to {len(same)} more with this name"
-        checkbox.value = bool(same)
+        checklist = self.same_list()
+        checklist.clear_options()
+        checklist.add_options(
+            Selection(
+                Text.assemble(
+                    (o.txn.date, "bold"),
+                    "  ",
+                    amount_text(o.txn.amount(self.roles)),
+                    "  ",
+                    (o.txn.comment, "dim"),
+                ),
+                o.key,
+            )
+            for o in same
+        )
+        self.update_same_title()
         self.query_one("#same-row").display = bool(same)
         self.load_rule_fields(item.source)
         self.show_history(item)
@@ -333,6 +354,12 @@ class ReviewApp(App[int]):
             field = self.query_one(selector, Input)
             if not only_untouched or field.value == defaults[selector]:
                 field.value = value
+        self.untype()
+
+    def untype(self) -> None:
+        """Values set by the review are not typed: they open no completion."""
+        for field in self.query(FormInput):
+            field.typed = False
 
     def action_copy(self, n: int) -> None:
         """1-5: copy that history row's account, description and tags."""
@@ -429,6 +456,11 @@ class ReviewApp(App[int]):
         text = t.description if part == "description" else t.comment
         pattern.value = hledger.rules_pattern(text)
 
+    def on_selection_list_selected_changed(
+        self, event: SelectionList.SelectedChanged[str]
+    ) -> None:
+        self.update_same_title()
+
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "search":
             if self.search_active:
@@ -454,42 +486,31 @@ class ReviewApp(App[int]):
         form = self.query_one("#detail")
         return [w for w in self.screen.focus_chain if form in w.ancestors]
 
-    def on_mode_changed(self, event: ModeChanged) -> None:
+    def in_form(self) -> bool:
+        return self.focused in self.form_fields()
+
+    def show_mode(self) -> None:
+        """The status line says where keys go: the list's commands or the form."""
         mode = self.query_one("#mode", Static)
-        mode.update("INSERT" if event.editing else "NORMAL")
-        mode.set_class(event.editing, "-insert")
+        in_form = self.in_form()
+        mode.update("FORM" if in_form else "LIST")
+        mode.set_class(in_form, "-form")
+        self.refresh_bindings()
 
-    def action_insert(self) -> None:
-        """i: on a field, start typing in it; on the list, go to the form."""
-        if isinstance(self.focused, ModalInput):
-            self.focused.set_editing(True)
-        else:
-            self.action_to_form()
-
-    def action_normal(self) -> None:
-        """Esc: leave insert mode, else cancel or clear the search."""
-        focused = self.focused
-        if isinstance(focused, ModalInput) and focused.editing:
-            focused.set_editing(False)
-        elif focused is self.query_one("#search", Input):
+    def action_escape(self) -> None:
+        """Esc: from the form back to the list, else cancel or clear the search."""
+        if self.in_form():
+            self.list_table().focus()
+        elif self.focused is self.query_one("#search", Input):
             self.list_table().move_cursor(row=self.search_origin)
             self.clear_search()
         elif self.search_active:
             self.clear_search()
 
-    def action_to_list(self) -> None:
-        self.list_table().focus()
-
     def action_to_form(self) -> None:
         fields = self.form_fields()
         if fields and self.focused not in fields:
             fields[0].focus()
-
-    def action_field(self, delta: int) -> None:
-        fields = self.form_fields()
-        if self.focused in fields:
-            i = fields.index(self.focused) + delta
-            fields[max(0, min(i, len(fields) - 1))].focus()
 
     # search
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
@@ -715,8 +736,7 @@ class ReviewApp(App[int]):
             if field:
                 item_years = self.save_rule(t, field, pattern, account, desc, tags)
             else:
-                if self.query_one("#same", Checkbox).value:
-                    group += self.same_name(t)
+                group += [self.item_for_key(k) for k in self.same_list().selected]
                 self.save_one_offs(group, account, desc, tags)
                 item_years = [(o.source, o.year) for o in group]
         except SaveError as e:

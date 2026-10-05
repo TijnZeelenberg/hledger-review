@@ -1,23 +1,14 @@
-"""Shared widgets: vim-like lists and modal text fields.
+"""Shared widgets: a vim-like list and the form's text fields.
 
-Text fields start in normal mode: letters are commands, not text. `i` on a
-field enters insert mode for that field; Esc (or leaving the field) ends it.
+The list moves with vim keys; the form is a plain form: a focused field
+takes text right away, Tab moves between fields and Esc goes back to the list.
 """
 
 from typing import ClassVar
 
 from textual import events
 from textual.binding import Binding, BindingType
-from textual.message import Message
-from textual.widgets import DataTable, Input
-
-
-class ModeChanged(Message):
-    """A field entered or left insert mode."""
-
-    def __init__(self, editing: bool) -> None:
-        super().__init__()
-        self.editing = editing
+from textual.widgets import DataTable, Input, RadioSet, SelectionList
 
 
 class ListTable(DataTable[object]):
@@ -34,31 +25,39 @@ class ListTable(DataTable[object]):
         super().__init__(id=id, cursor_type="row", zebra_stripes=True)
 
 
-class ModalInput(Input):
-    """An Input that only accepts text in insert mode."""
+class FormInput(Input):
+    """An Input that knows whether its text came from the keyboard."""
 
-    editing = False
-
-    def set_editing(self, editing: bool) -> None:
-        if editing != self.editing:
-            self.editing = editing
-            self.set_class(editing, "-editing")
-            self.post_message(ModeChanged(editing))
-
-    def check_consume_key(self, key: str, character: str | None) -> bool:
-        return self.editing and super().check_consume_key(key, character)
-
-    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
-        # the Input's own bindings (backspace, arrows, enter...) need insert mode
-        return self.editing
+    # False after the review fills the field, so that opens no completion
+    typed = False
 
     async def _on_key(self, event: events.Key) -> None:
-        if not self.editing:
-            event.prevent_default()  # skip Input's handler that inserts text
+        self.typed = True
 
     def _on_paste(self, event: events.Paste) -> None:
-        if not self.editing:
-            event.prevent_default()
+        self.typed = True
 
     def _on_blur(self, event: events.Blur) -> None:
-        self.set_editing(False)
+        self.typed = False
+
+
+def is_text(character: str | None) -> bool:
+    return character is not None and character.isprintable()
+
+
+class FormSelectionList(SelectionList[str]):
+    """A checklist whose letters and digits are never the app's commands."""
+
+    def check_consume_key(self, key: str, character: str | None) -> bool:
+        return is_text(character)
+
+    def _on_focus(self, event: events.Focus) -> None:
+        if self.highlighted is None and self.option_count:
+            self.highlighted = 0  # so Space ticks a row straight away
+
+
+class FormRadioSet(RadioSet):
+    """A radio set whose letters and digits are never the app's commands."""
+
+    def check_consume_key(self, key: str, character: str | None) -> bool:
+        return is_text(character)

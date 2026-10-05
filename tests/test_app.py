@@ -2,15 +2,15 @@ import contextlib
 from pathlib import Path
 
 import pytest
-from textual.widgets import Checkbox, DataTable, Input, RadioSet, Static
+from textual.widgets import DataTable, Input, RadioSet, SelectionList, Static
 
 from hledger_review import hledger
 from hledger_review.app import ReviewApp
-from hledger_review.completion import Complete, ModalAutoComplete, TagComplete
+from hledger_review.completion import Complete, TagComplete, TypedAutoComplete
 from hledger_review.config import Config, load
 from hledger_review.importer import load_items, year_transactions
 from hledger_review.journal import Txn
-from hledger_review.widgets import ModalInput
+from hledger_review.widgets import FormInput
 from tests.conftest import needs_hledger
 
 pytestmark = needs_hledger  # every save regenerates with hledger
@@ -59,7 +59,9 @@ async def test_save_writes_one_offs_for_the_same_name(workdir: Path) -> None:
     config = load()
     app = make_app(config)
     async with app.run_test() as pilot:
-        assert app.query_one("#same", Checkbox).value  # two Albert Heijn 1234
+        same = app.query_one("#same", SelectionList)
+        assert same.option_count == 1 and not same.selected  # two Albert Heijn 1234
+        same.select_all()
         app.query_one("#desc", Input).value = "Groceries"
         app.query_one("#account", Input).value = "expenses:food:groceries"
         await pilot.pause()
@@ -80,6 +82,34 @@ async def test_save_writes_one_offs_for_the_same_name(workdir: Path) -> None:
         assert t.account(config.roles) == "expenses:food:groceries"
     assert journal_txn(config, "2026-01-03").lines[2].endswith("= €976.01")
     assert journal_txn(config, "2026-01-05").account(config.roles) == "expenses:unknown"
+
+
+async def test_same_name_saves_only_the_checked(workdir: Path) -> None:
+    config = load()
+    app = make_app(config)
+    async with app.run_test() as pilot:
+        app.query_one("#account", Input).value = "expenses:food:groceries"
+        await pilot.pause()
+        await pilot.press("w")  # nothing checked by default
+        assert app.changed == 1
+    saved = one_offs(workdir)[1:]
+    assert len(saved) == 1 and saved[0].startswith(f"{AH_03}|expenses:food:groceries|")
+
+
+async def test_tab_reaches_the_same_name_checklist(workdir: Path) -> None:
+    config = load()
+    app = make_app(config)
+    async with app.run_test() as pilot:
+        same = app.query_one("#same", SelectionList)
+        await pilot.press("l", "tab", "tab", "tab")  # description, account, tags
+        assert app.focused is same and same.highlighted == 0
+        await pilot.press("space")
+        assert same.selected == ["bank:2026:2"]
+        assert str(same.border_title) == "Also apply to 1/1"
+        await pilot.press("j", "w", "q")  # letters in the form are not commands
+        assert app.focused is same and app.changed == 0 and app.is_running
+        await pilot.press("shift+tab")
+        assert app.focused is app.query_one("#tags")
 
 
 async def test_same_description_keeps_the_comment(workdir: Path) -> None:
@@ -111,6 +141,7 @@ async def test_tags_go_in_the_one_off_comment(workdir: Path) -> None:
         app.query_one("#desc", Input).value = "Groceries"  # clears the notes
         app.query_one("#account", Input).value = "expenses:food:groceries"
         app.query_one("#tags", Input).value = " reis : gent| vast"
+        app.query_one("#same", SelectionList).select_all()
         await pilot.pause()
         await pilot.press("w")
         assert app.changed == 2
@@ -144,7 +175,6 @@ async def test_new_account_needs_confirmation_and_is_declared(workdir: Path) -> 
     config = load()
     app = make_app(config)
     async with app.run_test() as pilot:
-        app.query_one("#same", Checkbox).value = False
         app.query_one("#account", Input).value = "expenses:food:snacks"
         await pilot.pause()
         await pilot.press("w")
@@ -263,61 +293,49 @@ async def test_j_and_k_move_through_the_list(workdir: Path) -> None:
         assert app.current is not None and app.current.txn.date == "2026-01-05"
 
 
-async def test_keys_are_modal(workdir: Path) -> None:
+async def test_the_form_takes_text_right_away(workdir: Path) -> None:
     config = load()
     app = make_app(config)
     async with app.run_test() as pilot:
-        desc = app.query_one("#desc", ModalInput)
-        await pilot.press("l")  # list -> form, still normal mode
-        assert app.focused is desc and not desc.editing
-        before = desc.value
-        await pilot.press("x", "backspace")  # normal mode: not text
-        assert desc.value == before
-        await pilot.press("j")  # next field
-        assert app.focused is app.query_one("#account", ModalInput)
-        await pilot.press("j")
-        assert app.focused is app.query_one("#tags", ModalInput)
-        await pilot.press("k")
-        await pilot.press("k", "i")  # back up, insert
-        assert app.focused is desc and desc.editing
-        assert mode_text(app) == "INSERT"
+        desc = app.query_one("#desc", FormInput)
+        await pilot.press("l")  # list -> form, typing at once
+        assert app.focused is desc and mode_text(app) == "FORM"
         assert app.sub_title == "main.journal"
-        desc.value = ""
-        await pilot.press("w", "n", "q", "h", "j")  # insert mode: all text
-        assert desc.value == "wnqhj" and app.changed == 0 and app.is_running
-        await pilot.press("escape")  # normal again, still on the field
-        assert app.focused is desc and not desc.editing
-        assert mode_text(app) == "NORMAL"
-        await pilot.press("h")
-        assert isinstance(app.focused, DataTable)
+        await pilot.press("ctrl+u", "w", "n", "q", "h", "j", "1", "slash")
+        assert desc.value == "wnqhj1/" and app.changed == 0 and app.is_running
+        assert not app.query_one("#search-bar").display
+        await pilot.press("tab")
+        assert app.focused is app.query_one("#account", FormInput)
+        await pilot.press("shift+tab")
+        assert app.focused is desc
+        await pilot.press("escape")  # back to the list
+        assert isinstance(app.focused, DataTable) and mode_text(app) == "LIST"
         await pilot.press("G")
         assert app.current is not None and app.current.txn.comment == "Paid back"
         await pilot.press("g")
         assert app.current is not None and app.current.txn.date == "2026-01-03"
 
 
-async def test_leaving_a_field_ends_insert_mode(workdir: Path) -> None:
+async def test_enter_in_the_description_goes_to_the_account(workdir: Path) -> None:
     config = load()
     app = make_app(config)
     async with app.run_test() as pilot:
-        await pilot.press("l", "i", "enter")  # Enter in the description
-        account = app.query_one("#account", ModalInput)
-        assert app.focused is account and not account.editing
-        assert not app.query_one("#desc", ModalInput).editing
+        await pilot.press("l", "enter")
+        assert app.focused is app.query_one("#account", FormInput)
 
 
 async def test_enter_saves_and_stays_in_the_form(workdir: Path) -> None:
     config = load()
     app = make_app(config)
     async with app.run_test() as pilot:
-        app.query_one("#same", Checkbox).value = False
-        app.query_one("#desc", ModalInput).value = "Groceries"
-        app.query_one("#account", ModalInput).value = "expenses:food:groceries"
+        app.query_one("#desc", FormInput).value = "Groceries"
+        app.query_one("#account", FormInput).value = "expenses:food:groceries"
         await pilot.pause()
-        await pilot.press("l", "j", "i", "enter")  # insert on account, Enter
+        await pilot.press("l", "tab", "enter")  # Enter on the account
         assert app.changed == 1
-        desc = app.query_one("#desc", ModalInput)
-        assert app.focused is desc and not desc.editing
+        assert app.focused is app.query_one("#desc", FormInput)
+        await pilot.pause()
+        assert not any(d.display for d in app.query(TypedAutoComplete))  # refilled
 
 
 async def test_e_and_shift_e_edit_and_regenerate(
@@ -342,7 +360,7 @@ async def test_e_and_shift_e_edit_and_regenerate(
         await pilot.press("e")
         assert app.changed == 1  # Spotify, categorised by the new rule
         assert app.status == {"bank:2026:1": "done"}
-        await pilot.press("l", "E")  # a field in normal mode: still a command
+        await pilot.press("E")
     one_offs = str(workdir / "2026" / "one-offs.rules")
     assert calls == [["nvim", "--clean", str(rules)], ["nvim", "--clean", one_offs]]
     t = journal_txn(config, "2026-01-05")
@@ -364,9 +382,9 @@ async def test_form_saves_through_keys(workdir: Path) -> None:
     config = load()
     app = make_app(config)
     async with app.run_test(size=(120, 34)) as pilot:
-        await pilot.press("l", "i", "ctrl+u", *"Groceries", "escape")
-        await pilot.press("j", "i", *"expenses:food:groceries", "escape", "escape")
-        await pilot.press("j", "i", *"vast", "enter")
+        await pilot.press("l", "ctrl+u", *"Groceries", "tab")
+        await pilot.press(*"expenses:food:groceries", "tab", *"vast", "tab")
+        await pilot.press("space", "ctrl+s")  # check the other Albert Heijn
         assert app.changed == 2
     assert one_offs(workdir)[1:] == [
         f"{AH_03}|expenses:food:groceries|Groceries|vast:",
@@ -379,11 +397,11 @@ async def test_mode_indicator(workdir: Path) -> None:
     app = make_app(config)
     async with app.run_test() as pilot:
         mode = app.query_one("#mode", Static)
-        assert mode_text(app) == "NORMAL" and not mode.has_class("-insert")
-        await pilot.press("l", "i")
-        assert mode_text(app) == "INSERT" and mode.has_class("-insert")
+        assert mode_text(app) == "LIST" and not mode.has_class("-form")
+        await pilot.press("l")
+        assert mode_text(app) == "FORM" and mode.has_class("-form")
         await pilot.press("escape")
-        assert mode_text(app) == "NORMAL" and not mode.has_class("-insert")
+        assert mode_text(app) == "LIST" and not mode.has_class("-form")
 
 
 # search
@@ -448,12 +466,12 @@ async def test_escape_cancels_the_search_where_it_started(workdir: Path) -> None
         assert isinstance(app.focused, DataTable)
 
 
-async def test_search_keys_are_text_in_insert_mode(workdir: Path) -> None:
+async def test_search_keys_are_text_in_the_form(workdir: Path) -> None:
     config = load()
     app = make_app(config)
     async with app.run_test() as pilot:
-        desc = app.query_one("#desc", ModalInput)
-        await pilot.press("l", "i", "ctrl+u", "slash", "g", "G", "n", "N")
+        desc = app.query_one("#desc", FormInput)
+        await pilot.press("l", "ctrl+u", "slash", "g", "G", "n", "N")
         assert desc.value == "/gGnN" and row(app) == 0
         assert not app.query_one("#search-bar").display
 
@@ -506,11 +524,11 @@ async def test_digits_copy_a_history_row(history_workdir: Path) -> None:
         await pilot.press("j", "2")  # Spotify AB, from the list
         assert form(app) == ("Spotify", "expenses:subscriptions", "vast")
         assert hint(app) == "copied from 2025-01-10"
-        await pilot.press("l", "j", "1")  # in the form, normal mode
+        await pilot.press("1")
         assert form(app) == ("Beer in Prague", "expenses:food:drinks", "reis:praag")
         await pilot.press("5")  # no such row
         assert form(app)[0] == "Beer in Prague"
-        await pilot.press("k", "i", "end", "3")  # insert mode: text
+        await pilot.press("l", "end", "3")  # in the form: text
         assert form(app)[0] == "Beer in Prague3"
         assert app.changed == 0
 
@@ -529,11 +547,10 @@ async def test_history_follows_a_save(history_workdir: Path) -> None:
     config = load()
     app = make_app(config)
     async with app.run_test() as pilot:
-        app.query_one("#same", Checkbox).value = False
         app.query_one("#desc", Input).value = "Weekly shop"
         await pilot.press("w")  # suggested account, own description
         assert app.changed == 1
-        await pilot.press("h", "j")  # on to the other Albert Heijn
+        await pilot.press("j")  # on to the other Albert Heijn
         assert app.current is not None and app.current.txn.date == "2026-01-06"
         history = app.query_one("#history", DataTable)
         assert history.get_row_at(0)[1] == "2026-01-03"
@@ -552,8 +569,8 @@ async def test_tag_completion_replaces_only_the_token(history_workdir: Path) -> 
     app = make_app(config)
     async with app.run_test() as pilot:
         dropdown = app.query_one(TagComplete)
-        tags = app.query_one("#tags", ModalInput)
-        await pilot.press("l", "j", "j", "i")
+        tags = app.query_one("#tags", FormInput)
+        await pilot.press("l", "tab", "tab")
         tags.value = ", vast"
         tags.cursor_position = 0
         await pilot.press(*"reis:")
@@ -575,11 +592,10 @@ async def test_description_completion(history_workdir: Path) -> None:
     app = make_app(config)
     async with app.run_test() as pilot:
         dropdown = app.query_one(Complete)
-        desc = app.query_one("#desc", ModalInput)
+        desc = app.query_one("#desc", FormInput)
         await pilot.press("l")
         await pilot.pause()
-        assert not dropdown.display  # prefilled, but not in insert mode
-        await pilot.press("i")
+        assert not dropdown.display  # prefilled, not typed
         desc.value = ""
         await pilot.press(*"sho")
         await pilot.pause()
@@ -592,18 +608,17 @@ async def test_description_completion(history_workdir: Path) -> None:
         assert desc.value == "Beer in Prague"
 
 
-async def test_account_completion_needs_insert_mode(history_workdir: Path) -> None:
+async def test_account_completion_needs_typing(history_workdir: Path) -> None:
     config = load()
     app = make_app(config)
     async with app.run_test() as pilot:
         dropdown = next(
-            d for d in app.query(ModalAutoComplete) if type(d) is ModalAutoComplete
+            d for d in app.query(TypedAutoComplete) if type(d) is TypedAutoComplete
         )
-        account = app.query_one("#account", ModalInput)
-        await pilot.press("j", "l", "j", "2")  # copying opens nothing
+        account = app.query_one("#account", FormInput)
+        await pilot.press("j", "2", "l", "tab")  # copying opens nothing
         await pilot.pause()
         assert account.value == "expenses:subscriptions" and not dropdown.display
-        await pilot.press("i")
         account.value = ""
         await pilot.press(*"subs")
         await pilot.pause()
@@ -613,12 +628,12 @@ async def test_account_completion_needs_insert_mode(history_workdir: Path) -> No
 
 
 # layout and suggestions together
-async def test_digits_are_text_in_insert_mode_and_search(history_workdir: Path) -> None:
+async def test_digits_are_text_in_the_form_and_search(history_workdir: Path) -> None:
     config = load()
     app = make_app(config)
     async with app.run_test() as pilot:
-        await pilot.press("l", "i", "ctrl+u", "1", "2")
+        await pilot.press("l", "ctrl+u", "1", "2")
         assert app.query_one("#desc", Input).value == "12"
-        await pilot.press("escape", "h", "slash", "1", "2")
+        await pilot.press("escape", "slash", "1", "2")
         assert app.query_one("#search", Input).value == "12"
         assert app.query_one("#desc", Input).value == "12"

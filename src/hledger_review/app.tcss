@@ -39,28 +39,27 @@ Screen > Horizontal { padding: 0 1; }
 #info { margin-bottom: 1; }
 .row { height: auto; }
 .field { width: 13; height: 3; content-align: left middle; color: $text-muted; }
-.row ModalInput, .row Checkbox { width: 1fr; }
+.row Input, .row SelectionList { width: 1fr; }
 .note { margin-left: 13; }
 #rule-row { margin-top: 1; }
 #rule-row .field { height: 1; }
-ModalInput, Checkbox {
+#detail Input, SelectionList {
     border: round $border-blurred;
     background: $background;
     padding: 0 1;
 }
-ModalInput:focus, Checkbox:focus {
+#detail Input:focus, SelectionList:focus {
     border: round $border;
     background-tint: 0%;
 }
-ModalInput:disabled { border: round $border-blurred 50%; }
+#detail Input:disabled { border: round $border-blurred 50%; }
 #new-account { color: $warning; display: none; }
 #rule-field { width: 1fr; border: none; padding: 0; layout: horizontal; height: auto; background: $background; }
 #rule-field:focus { background-tint: 0%; }
 #rule-field RadioButton { width: auto; margin-right: 2; }
 #rule-field RadioButton > .toggle--button { background: $background; color: $text-muted; }
 #rule-field RadioButton.-on > .toggle--button { color: $success; }
-#same > .toggle--button { background: $background; color: $text-muted; }
-#same.-on > .toggle--button { color: $success; }
+#same { height: auto; max-height: 7; border-title-color: $text-muted; }
 #rule-error { color: $error; height: 1; }
 AutoComplete {
     border: round $border;
@@ -81,10 +80,10 @@ AutoComplete .autocomplete--highlight-match { color: $accent; text-style: bold; 
 #history > .datatable--even-row, #history > .datatable--odd-row { background: $background; }
 #suggestion { color: $text-muted; text-style: italic; height: 1; }
 
-/* insert mode */
-ModalInput.-editing:focus { border: heavy $success; }
+/* the field that takes text */
+#detail Input:focus { border: heavy $success; }
 
-/* status line: vim-like mode, the search, the key hints */
+/* status line: list or form, the search, the key hints */
 #statusbar { dock: bottom; height: 1; padding: 0; }
 #mode {
     width: auto;
@@ -93,7 +92,7 @@ ModalInput.-editing:focus { border: heavy $success; }
     color: $background;
     text-style: bold;
 }
-#mode.-insert { background: $success; }
+#mode.-form { background: $success; }
 #search-bar { display: none; width: auto; height: 1; padding: 0 0 0 1; }
 #slash { color: $accent; text-style: bold; }
 #search {

@@ -73,8 +73,9 @@ For each one you set:
   confirmed first and can be declared in an accounts file,
 - optionally, [tags](https://hledger.org/hledger.html#tags), such as
   `reis:gent, vast`,
-- optionally, the same result for every other listed transaction with the
-  same name,
+- optionally, the same result for other listed transactions with the same
+  name, ticked in a checklist (date, amount, notes) that starts with nothing
+  ticked,
 - or, instead, a rule for the shared rules file, matching one CSV field
   (for example `%payee`), with the pattern prefilled. It must match this
   transaction; it applies to every year.
@@ -87,7 +88,7 @@ transaction comes from its CSV row, through the shared rules' top-level
 `description` (e.g. `%payee`). When the same bank name was categorised before,
 the form starts with the most frequent description, account and tags among
 those (ties go to the newest), marked "suggested from N earlier"; it is only
-saved when you save. Description and tags complete, in insert mode, from what
+saved when you save. Description and tags complete, as you type, from what
 the journal already has, most frequent first; tags complete the tag under the
 cursor, names and `name:value` pairs.
 
@@ -106,7 +107,7 @@ colon in the bank text cannot swallow the tags. Tags are comma-separated `name:v
 `vast` is written as `vast:`, whitespace is tidied, `|` and line breaks
 separate tags like commas do, and a tag the comment already has is not added
 twice. A tag name must be one word. The tags apply to every transaction saved
-together (same name). To change or remove tags later, edit the one-offs (`E`).
+together (the ticked ones with the same name). To change or remove tags later, edit the one-offs (`E`).
 A table without a `comment` column cannot take tags. A rule's `comment` is
 the tags alone, or empty without tags, as before.
 Saving the same transaction again replaces its line. Then the year (every
@@ -121,10 +122,11 @@ descriptions and comments). Rows that tie on all three pair up in the order
 hledger reads them. Without balance assertions (no `balanceN` in the rules)
 only date and amount are compared, which is only as reliable as that order.
 
-Keys are vim-like and modal. Everything starts in normal mode, where letters
-are commands, including on a text field. Press `i` on a field to type in it;
-Esc or leaving the field ends insert mode. The status line at the bottom left
-shows `NORMAL` or `INSERT`.
+The list has vim-like keys: there, letters are commands. The form on the
+right is a plain form: a field takes text as soon as it has focus, Tab and
+Shift+Tab move between fields, and letters and digits are never commands.
+Esc goes back to the list. The status line at the bottom left shows `LIST` or
+`FORM`.
 
 `/` searches the list: as you type, the cursor jumps to the next transaction
 whose name, notes or amount contains the text (case-insensitive; `,` and `.`
@@ -135,19 +137,31 @@ where the search started; Esc afterwards ends the search, and `n` skips again.
 
 | Key       | Action |
 |-----------|--------|
-| j / k     | next / previous row in the list, or field in the form |
-| g / G     | first / last row (in the list) |
+On the list:
+
+| Key       | Action |
+|-----------|--------|
+| j / k     | next / previous row |
+| g / G     | first / last row |
+| l         | to the form (Enter on a row too) |
 | /         | search the list; Enter keeps the search, Esc cancels or ends it |
-| h / l     | to the list / to the form (Enter on a row also goes to the form) |
-| i         | insert mode on the current field |
-| Esc       | back to normal mode; else cancel or end the search |
-| w         | write (save); Enter in the account or tags field in insert mode too |
+| w         | write (save) |
 | n         | next: skip this transaction; the next match while searching |
 | N         | the previous match while searching |
-| 1–5       | copy that row of the history panel into the form, in normal mode |
+| 1–5       | copy that row of the history panel into the form |
 | e         | edit the shared rules in `$VISUAL`/`$EDITOR`, then regenerate |
 | E         | edit this year's one-offs, then regenerate |
 | q         | quit |
+
+In the form:
+
+| Key               | Action |
+|-------------------|--------|
+| Tab / Shift+Tab   | next / previous field |
+| ↑ / ↓, Space      | move through / tick or untick the same-name checklist |
+| Enter             | description: on to the account; account, tags, pattern: save |
+| Ctrl+S            | write (save), anywhere |
+| Esc               | close a completion, else back to the list |
 
 Use `--since YYYY-MM-DD` to limit the review. Use `--all` to also revisit
 transactions that are already categorised.

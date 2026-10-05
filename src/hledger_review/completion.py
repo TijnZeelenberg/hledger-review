@@ -15,7 +15,7 @@ from textual_autocomplete import AutoComplete, DropdownItem, TargetState
 from hledger_review import hledger
 from hledger_review.history import comment_tags
 from hledger_review.journal import Txn, transactions
-from hledger_review.widgets import ModalInput
+from hledger_review.widgets import FormInput
 
 
 @dataclass
@@ -88,16 +88,16 @@ def tag_token(text: str, cursor: int) -> tuple[int, str]:
     return start, text[start:cursor]
 
 
-class ModalAutoComplete(AutoComplete):
-    """An AutoComplete that only opens while its field is in insert mode."""
+class TypedAutoComplete(AutoComplete):
+    """An AutoComplete that only opens on text typed into its field."""
 
     def should_show_dropdown(self, search_string: str) -> bool:
         target = self.target
-        editing = isinstance(target, ModalInput) and target.editing
-        return editing and super().should_show_dropdown(search_string)
+        typed = isinstance(target, FormInput) and target.typed
+        return typed and super().should_show_dropdown(search_string)
 
 
-class Complete(ModalAutoComplete):
+class Complete(TypedAutoComplete):
     """A dropdown over ranked candidates: prefix matches, then substring ones."""
 
     def __init__(self, target: str, pool: Callable[[], list[str]]) -> None:
